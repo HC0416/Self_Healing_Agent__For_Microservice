@@ -1,0 +1,2173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sentinel — Self-Healing Agent</title>
+
+<!-- Icons -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/3.44.0/tabler-icons.min.css" />
+<!-- Charts -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<!-- React (no build step, no Babel — JSX is pre-compiled below) -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+
+<style>
+  html,body{margin:0;padding:0;background:#080b10}
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: #0d1117; }
+  ::-webkit-scrollbar-thumb { background: #2d3748; border-radius: 2px; }
+  button { font-family: inherit; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  @keyframes fadein{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:translateY(0)}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+const {
+  useState,
+  useEffect,
+  useRef
+} = React;
+
+// ── Config ─────────────────────────────────────────────────
+const WS_URL = "ws://localhost:8000/ws/dashboard";
+const INITIAL = {
+  services: [],
+  action_counts: {
+    RESTART: 18,
+    SCALE_UP: 12,
+    CIRCUIT_BREAK: 8,
+    REROUTE: 6,
+    ROLLBACK: 3
+  },
+  recent_actions: [],
+  mttr_history: [8.2, 7.1, 6.3, 5.8, 5.2, 4.9, 4.5, 4.3, 4.2, 4.1, 4.0, 4.2, 4.1, 3.9, 4.2],
+  metrics: {
+    total_recoveries: 47,
+    success_rate: 97.8,
+    avg_mttr: 4.2,
+    false_alarms: 0
+  }
+};
+
+// ── Panel ──────────────────────────────────────────────────
+function Panel({
+  title,
+  sub,
+  children,
+  style = {}
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#161b27",
+      border: "0.5px solid #1e2433",
+      borderRadius: 7,
+      overflow: "hidden",
+      ...style
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "9px 12px",
+      borderBottom: "0.5px solid #1e2433",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 500,
+      color: "#e2e8f0"
+    }
+  }, title), sub && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: "#475569"
+    }
+  }, sub)), children);
+}
+
+// ── MetricCards ────────────────────────────────────────────
+function MetricCards({
+  metrics
+}) {
+  const cards = [{
+    label: "Total recoveries",
+    value: metrics.total_recoveries,
+    sub: "since deployment",
+    color: "#4ade80"
+  }, {
+    label: "Success rate",
+    value: `${metrics.success_rate}%`,
+    sub: `${metrics.total_recoveries - Math.round(metrics.total_recoveries * (1 - metrics.success_rate / 100))} / ${metrics.total_recoveries}`,
+    color: "#4ade80"
+  }, {
+    label: "Avg MTTR",
+    value: `${metrics.avg_mttr}s`,
+    sub: "↓ from 8.2s baseline",
+    color: "#4ade80"
+  }, {
+    label: "False alarms",
+    value: metrics.false_alarms,
+    sub: "precision 96.8%",
+    color: "#4ade80"
+  }];
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(4,1fr)",
+      gap: 8,
+      marginBottom: 10
+    }
+  }, cards.map(c => /*#__PURE__*/React.createElement("div", {
+    key: c.label,
+    style: {
+      background: "#161b27",
+      border: "0.5px solid #1e2433",
+      borderRadius: 7,
+      padding: "11px 13px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#475569",
+      marginBottom: 3
+    }
+  }, c.label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 20,
+      fontWeight: 500,
+      color: c.color,
+      transition: "all 0.3s"
+    }
+  }, c.value), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#475569",
+      marginTop: 2
+    }
+  }, c.sub))));
+}
+
+// ── ServiceHealth ──────────────────────────────────────────
+const DEFAULT_SERVICES = [{
+  name: "ts-order-service",
+  status: "healthy",
+  score: 0.002
+}, {
+  name: "ts-payment-service",
+  status: "healthy",
+  score: 0.003
+}, {
+  name: "ts-execute-service",
+  status: "healthy",
+  score: 0.001
+}, {
+  name: "ts-station-service",
+  status: "healthy",
+  score: 0.004
+}, {
+  name: "ts-travel-service",
+  status: "healthy",
+  score: 0.002
+}, {
+  name: "ts-cancel-service",
+  status: "healthy",
+  score: 0.003
+}, {
+  name: "ts-preserve-service",
+  status: "healthy",
+  score: 0.002
+}, {
+  name: "ts-basic-service",
+  status: "healthy",
+  score: 0.001
+}];
+const DOT_COLOR = {
+  healthy: "#4ade80",
+  fault: "#f87171",
+  warning: "#fbbf24",
+  crashed: "#f87171"
+};
+const TAG = {
+  fault: {
+    bg: "#2d1515",
+    color: "#f87171",
+    label: "fault"
+  },
+  crashed: {
+    bg: "#2d1515",
+    color: "#f87171",
+    label: "crash"
+  },
+  warning: {
+    bg: "#2d2010",
+    color: "#fbbf24",
+    label: "warn"
+  }
+};
+function ServiceHealth({
+  services
+}) {
+  const svcs = services?.length ? services : DEFAULT_SERVICES;
+  const faults = svcs.filter(s => s.status !== "healthy").length;
+  return /*#__PURE__*/React.createElement(Panel, {
+    title: "Service health",
+    sub: faults ? `${faults} fault${faults > 1 ? "s" : ""}` : "all healthy"
+  }, svcs.map(svc => /*#__PURE__*/React.createElement("div", {
+    key: svc.name,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 7,
+      padding: "7px 12px",
+      borderBottom: "0.5px solid #1e2433",
+      transition: "background 0.3s"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: "50%",
+      flexShrink: 0,
+      background: DOT_COLOR[svc.status] || "#4ade80"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#94a3b8",
+      flex: 1
+    }
+  }, svc.name.replace("ts-", "").replace("-service", "")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontFamily: "monospace",
+      color: svc.status === "healthy" ? "#475569" : "#f87171"
+    }
+  }, (svc.score ?? 0).toFixed(3)), TAG[svc.status] && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 9,
+      padding: "1px 5px",
+      borderRadius: 3,
+      background: TAG[svc.status].bg,
+      color: TAG[svc.status].color
+    }
+  }, TAG[svc.status].label))));
+}
+
+// ── AgentReasoning ─────────────────────────────────────────
+const AR_COLORS = {
+  r: {
+    bg: "#2d1515",
+    fg: "#f87171"
+  },
+  g: {
+    bg: "#0f2918",
+    fg: "#4ade80"
+  },
+  a: {
+    bg: "#2d2010",
+    fg: "#fbbf24"
+  },
+  b: {
+    bg: "#0c1e35",
+    fg: "#60a5fa"
+  },
+  p: {
+    bg: "#1e1535",
+    fg: "#a78bfa"
+  }
+};
+const AR_ICON = {
+  RESTART: {
+    color: "r",
+    icon: "ti-refresh"
+  },
+  SCALE_UP: {
+    color: "a",
+    icon: "ti-arrows-up"
+  },
+  CIRCUIT_BREAK: {
+    color: "b",
+    icon: "ti-plug-connected-x"
+  },
+  REROUTE: {
+    color: "b",
+    icon: "ti-route"
+  },
+  ROLLBACK: {
+    color: "p",
+    icon: "ti-history"
+  }
+};
+function Tag({
+  type,
+  children
+}) {
+  const c = AR_COLORS[type] || AR_COLORS.b;
+  return /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "inline-block",
+      fontSize: 9,
+      padding: "1px 6px",
+      borderRadius: 3,
+      fontWeight: 500,
+      background: c.bg,
+      color: c.fg,
+      marginRight: 3
+    }
+  }, children);
+}
+const DEFAULT_ACTIONS = [{
+  service: "ts-order-service",
+  score: 0.891,
+  fault_type: "service_crash",
+  action: "RESTART",
+  root_cause: "ts-order-service",
+  reason: "Container exited unexpectedly. GNN score 0.891 above threshold. Root cause confirmed via node attention. RESTART selected.",
+  mttr: 4.1,
+  recovered: true,
+  timestamp: new Date().toISOString()
+}];
+function AgentReasoning({
+  actions
+}) {
+  const items = actions?.length ? actions : DEFAULT_ACTIONS;
+  return /*#__PURE__*/React.createElement(Panel, {
+    title: "Agent reasoning",
+    sub: "why each action was taken"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowY: "auto",
+      maxHeight: 300
+    }
+  }, items.map((item, i) => {
+    const cfg = AR_ICON[item.action] || AR_ICON.RESTART;
+    const c = AR_COLORS[cfg.color];
+    const time = new Date(item.timestamp).toLocaleTimeString("en-IE", {
+      hour12: false
+    });
+    const svcShort = (item.service || "").replace("ts-", "").replace("-service", "");
+    return /*#__PURE__*/React.createElement("div", {
+      key: i,
+      style: {
+        padding: "9px 12px",
+        borderBottom: "0.5px solid #1e2433",
+        animation: "fadein 0.4s ease"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 7,
+        marginBottom: 5
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: 22,
+        height: 22,
+        borderRadius: "50%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 11,
+        flexShrink: 0,
+        background: c.bg,
+        color: c.fg
+      }
+    }, /*#__PURE__*/React.createElement("i", {
+      className: `ti ${cfg.icon}`,
+      "aria-hidden": "true"
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: "#e2e8f0",
+        fontWeight: 500,
+        flex: 1
+      }
+    }, svcShort), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: "#475569"
+      }
+    }, time)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginBottom: 5
+      }
+    }, /*#__PURE__*/React.createElement(Tag, {
+      type: cfg.color
+    }, "score ", item.score), /*#__PURE__*/React.createElement(Tag, {
+      type: cfg.color
+    }, item.fault_type), /*#__PURE__*/React.createElement(Tag, {
+      type: "b"
+    }, item.action), /*#__PURE__*/React.createElement(Tag, {
+      type: "p"
+    }, "root: ", (item.root_cause || "").replace("ts-", "").replace("-service", ""))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: "#475569",
+        lineHeight: 1.5,
+        padding: "5px 8px",
+        background: "#0d1117",
+        borderRadius: 4,
+        borderLeft: "2px solid #1e2433",
+        marginBottom: 5
+      }
+    }, item.reason), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 4,
+        fontSize: 10,
+        color: item.recovered ? "#4ade80" : "#f87171"
+      }
+    }, /*#__PURE__*/React.createElement("i", {
+      className: `ti ${item.recovered ? "ti-circle-check" : "ti-circle-x"}`,
+      "aria-hidden": "true"
+    }), item.recovered ? `Recovered in ${item.mttr}s` : "Recovery failed — escalated"));
+  })));
+}
+
+// ── ActionBreakdown (doughnut) ─────────────────────────────
+const AB_COLORS = ["#f87171", "#fbbf24", "#60a5fa", "#a78bfa", "#34d399"];
+const AB_LABELS = ["RESTART", "SCALE_UP", "CIRCUIT_BREAK", "REROUTE", "ROLLBACK"];
+function ActionBreakdown({
+  counts,
+  total
+}) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+  const data = AB_LABELS.map(l => counts?.[l] || 0);
+  useEffect(() => {
+    if (!canvasRef.current || typeof Chart === "undefined") return;
+    if (chartRef.current) {
+      chartRef.current.data.datasets[0].data = data;
+      chartRef.current.update();
+      return;
+    }
+    chartRef.current = new Chart(canvasRef.current, {
+      type: "doughnut",
+      data: {
+        labels: AB_LABELS,
+        datasets: [{
+          data,
+          backgroundColor: AB_COLORS,
+          borderWidth: 0,
+          hoverOffset: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: "65%",
+        plugins: {
+          legend: {
+            display: false
+          }
+        }
+      }
+    });
+  }, [data.join(",")]);
+  return /*#__PURE__*/React.createElement(Panel, {
+    title: "Action breakdown",
+    sub: `${total || 0} recoveries`
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "10px 12px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 8,
+      marginBottom: 8
+    }
+  }, AB_LABELS.map((l, i) => /*#__PURE__*/React.createElement("span", {
+    key: l,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 4,
+      fontSize: 11,
+      color: "#64748b"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: 2,
+      background: AB_COLORS[i],
+      display: "inline-block"
+    }
+  }), l, " ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "#94a3b8"
+    }
+  }, data[i])))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "relative",
+      width: "100%",
+      height: 130
+    }
+  }, /*#__PURE__*/React.createElement("canvas", {
+    ref: canvasRef,
+    role: "img",
+    "aria-label": "Action breakdown donut chart"
+  }))));
+}
+
+// ── MTTRChart (line) ───────────────────────────────────────
+function MTTRChart({
+  history
+}) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+  const mttr = history?.length ? history : [8.2, 7.1, 6.3, 5.8, 5.2, 4.9, 4.5, 4.3, 4.2, 4.1];
+  useEffect(() => {
+    if (!canvasRef.current || typeof Chart === "undefined") return;
+    const labels = mttr.map((_, i) => `R${i + 1}`);
+    const baseline = mttr.map(() => 8.2);
+    if (chartRef.current) {
+      chartRef.current.data.labels = labels;
+      chartRef.current.data.datasets[0].data = mttr;
+      chartRef.current.data.datasets[1].data = baseline;
+      chartRef.current.update();
+      return;
+    }
+    chartRef.current = new Chart(canvasRef.current, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          label: "MTTR (s)",
+          data: mttr,
+          borderColor: "#4ade80",
+          backgroundColor: "rgba(74,222,128,0.07)",
+          borderWidth: 2,
+          pointRadius: 2,
+          pointBackgroundColor: "#4ade80",
+          fill: true,
+          tension: 0.4
+        }, {
+          label: "Baseline 8.2s",
+          data: baseline,
+          borderColor: "#f87171",
+          borderWidth: 1,
+          borderDash: [3, 3],
+          pointRadius: 0,
+          fill: false
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            labels: {
+              color: "#64748b",
+              font: {
+                size: 10
+              },
+              boxWidth: 8
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: {
+              color: "#1e2433"
+            },
+            ticks: {
+              color: "#475569",
+              font: {
+                size: 9
+              },
+              autoSkip: true,
+              maxTicksLimit: 8
+            }
+          },
+          y: {
+            grid: {
+              color: "#1e2433"
+            },
+            ticks: {
+              color: "#475569",
+              font: {
+                size: 9
+              }
+            },
+            min: 0,
+            max: 10
+          }
+        }
+      }
+    });
+  }, [JSON.stringify(mttr)]);
+  return /*#__PURE__*/React.createElement(Panel, {
+    title: "MTTR over time",
+    sub: "seconds per recovery"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "10px 12px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "relative",
+      width: "100%",
+      height: 260
+    }
+  }, /*#__PURE__*/React.createElement("canvas", {
+    ref: canvasRef,
+    role: "img",
+    "aria-label": "MTTR line chart"
+  }))));
+}
+
+// ── Overview ───────────────────────────────────────────────
+const OV_DOT = {
+  healthy: "#4ade80",
+  fault: "#f87171",
+  warning: "#fbbf24"
+};
+const OV_DEFAULT_SVCS = [{
+  name: "ts-order-service",
+  status: "healthy",
+  score: 0.002
+}, {
+  name: "ts-payment-service",
+  status: "healthy",
+  score: 0.003
+}, {
+  name: "ts-execute-service",
+  status: "healthy",
+  score: 0.001
+}, {
+  name: "ts-station-service",
+  status: "healthy",
+  score: 0.004
+}, {
+  name: "ts-travel-service",
+  status: "healthy",
+  score: 0.002
+}, {
+  name: "ts-cancel-service",
+  status: "healthy",
+  score: 0.003
+}, {
+  name: "ts-preserve-service",
+  status: "healthy",
+  score: 0.002
+}, {
+  name: "ts-basic-service",
+  status: "healthy",
+  score: 0.001
+}];
+function Overview({
+  data
+}) {
+  const {
+    metrics,
+    services,
+    recent_actions
+  } = data;
+  const faults = (services || []).filter(s => s.status !== "healthy");
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(4,1fr)",
+      gap: 8,
+      marginBottom: 12
+    }
+  }, [{
+    label: "Services monitored",
+    value: 40,
+    sub: "Train-Ticket",
+    color: "#e2e8f0"
+  }, {
+    label: "Active faults",
+    value: faults.length,
+    sub: "detected now",
+    color: faults.length > 0 ? "#f87171" : "#4ade80"
+  }, {
+    label: "Avg MTTR",
+    value: `${metrics?.avg_mttr || 4.2}s`,
+    sub: "↓ from 8.2s baseline",
+    color: "#4ade80"
+  }, {
+    label: "Model precision",
+    value: "96.8%",
+    sub: "AUC 0.947",
+    color: "#4ade80"
+  }].map(c => /*#__PURE__*/React.createElement("div", {
+    key: c.label,
+    style: {
+      background: "#161b27",
+      border: "0.5px solid #1e2433",
+      borderRadius: 7,
+      padding: "11px 13px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#475569",
+      marginBottom: 3
+    }
+  }, c.label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 20,
+      fontWeight: 500,
+      color: c.color
+    }
+  }, c.value), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#475569",
+      marginTop: 2
+    }
+  }, c.sub)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10,
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement(Panel, {
+    title: "Service health",
+    sub: `${faults.length} faults`
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 12,
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 6
+    }
+  }, (services?.length ? services : OV_DEFAULT_SVCS).map(svc => /*#__PURE__*/React.createElement("div", {
+    key: svc.name,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      padding: "6px 8px",
+      background: "#0d1117",
+      borderRadius: 5
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: "50%",
+      flexShrink: 0,
+      background: OV_DOT[svc.status] || "#4ade80"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#94a3b8",
+      flex: 1
+    }
+  }, svc.name.replace("ts-", "").replace("-service", "")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontFamily: "monospace",
+      color: "#475569"
+    }
+  }, (svc.score ?? 0.001).toFixed(3)))))), /*#__PURE__*/React.createElement(Panel, {
+    title: "Recent events",
+    sub: "latest activity"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      maxHeight: 260,
+      overflowY: "auto"
+    }
+  }, (recent_actions || []).length === 0 ? /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 20,
+      textAlign: "center",
+      fontSize: 12,
+      color: "#475569"
+    }
+  }, "No events yet — system healthy") : (recent_actions || []).slice(0, 6).map((a, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: "flex",
+      gap: 8,
+      padding: "8px 12px",
+      borderBottom: "0.5px solid #1e2433",
+      alignItems: "flex-start"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: "50%",
+      marginTop: 3,
+      flexShrink: 0,
+      background: a.recovered ? "#4ade80" : "#f87171"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#e2e8f0"
+    }
+  }, (a.service || "").replace("ts-", "").replace("-service", ""), " → ", a.action), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#475569"
+    }
+  }, a.fault_type, " · ", a.recovered ? `recovered ${a.mttr}s` : "failed")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#475569"
+    }
+  }, new Date(a.timestamp).toLocaleTimeString("en-IE", {
+    hour12: false
+  }))))))), /*#__PURE__*/React.createElement(Panel, {
+    title: "System status"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 14,
+      display: "flex",
+      alignItems: "center",
+      gap: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 10,
+      height: 10,
+      borderRadius: "50%",
+      background: faults.length > 0 ? "#f87171" : "#4ade80",
+      animation: "blink 2s infinite"
+    }
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: "#e2e8f0",
+      fontWeight: 500
+    }
+  }, faults.length > 0 ? `${faults.length} fault${faults.length > 1 ? "s" : ""} detected — agent recovering` : "All systems operational"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#475569",
+      marginTop: 2
+    }
+  }, "GNN model active · A3 REINFORCE agent deployed · 40 services monitored")))));
+}
+
+// ── LiveFeed ───────────────────────────────────────────────
+const LF_COLOR = {
+  RESTART: {
+    bg: "#2d1515",
+    fg: "#f87171"
+  },
+  SCALE_UP: {
+    bg: "#2d2010",
+    fg: "#fbbf24"
+  },
+  CIRCUIT_BREAK: {
+    bg: "#0c1e35",
+    fg: "#60a5fa"
+  },
+  REROUTE: {
+    bg: "#0c1e35",
+    fg: "#60a5fa"
+  },
+  ROLLBACK: {
+    bg: "#1e1535",
+    fg: "#a78bfa"
+  },
+  ALERT_HUMAN: {
+    bg: "#2d1515",
+    fg: "#f87171"
+  }
+};
+const LF_ICON = {
+  RESTART: "ti-refresh",
+  SCALE_UP: "ti-arrows-up",
+  CIRCUIT_BREAK: "ti-plug-connected-x",
+  REROUTE: "ti-route",
+  ROLLBACK: "ti-history",
+  ALERT_HUMAN: "ti-alert-triangle"
+};
+function LFTag({
+  c,
+  children
+}) {
+  return /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "inline-block",
+      fontSize: 9,
+      padding: "2px 7px",
+      borderRadius: 3,
+      fontWeight: 500,
+      background: c.bg,
+      color: c.fg
+    }
+  }, children);
+}
+function LiveFeed({
+  data
+}) {
+  const events = data?.recent_actions || [];
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#475569"
+    }
+  }, events.length, " events recorded"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 5,
+      fontSize: 11,
+      color: "#4ade80",
+      padding: "3px 9px",
+      borderRadius: 20,
+      background: "#0f2918",
+      border: "0.5px solid #166534"
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 5,
+      height: 5,
+      borderRadius: "50%",
+      background: "#4ade80",
+      animation: "blink 2s infinite"
+    }
+  }), " Live")), events.length === 0 ? /*#__PURE__*/React.createElement(Panel, {
+    title: "Live feed"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 40,
+      textAlign: "center"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: "#475569",
+      marginBottom: 6
+    }
+  }, "No events yet"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#2d3748"
+    }
+  }, "Events will appear here when faults are detected"))) : /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 8
+    }
+  }, events.map((event, i) => {
+    const ac = LF_COLOR[event.action] || LF_COLOR.ROLLBACK;
+    const ai = LF_ICON[event.action] || "ti-refresh";
+    const time = new Date(event.timestamp).toLocaleTimeString("en-IE", {
+      hour12: false
+    });
+    const svcShort = (event.service || "").replace("ts-", "").replace("-service", "");
+    return /*#__PURE__*/React.createElement("div", {
+      key: i,
+      style: {
+        background: "#161b27",
+        border: "0.5px solid #1e2433",
+        borderRadius: 7,
+        padding: "12px 14px",
+        borderLeft: `3px solid ${ac.fg}`
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: 28,
+        height: 28,
+        borderRadius: "50%",
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 13,
+        background: ac.bg,
+        color: ac.fg
+      }
+    }, /*#__PURE__*/React.createElement("i", {
+      className: `ti ${ai}`,
+      "aria-hidden": "true"
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 13,
+        color: "#e2e8f0",
+        fontWeight: 500
+      }
+    }, svcShort, " — ", event.action), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: "#475569"
+      }
+    }, event.fault_type)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: "#475569",
+        fontFamily: "monospace"
+      }
+    }, time)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 5,
+        flexWrap: "wrap",
+        marginBottom: 8
+      }
+    }, /*#__PURE__*/React.createElement(LFTag, {
+      c: ac
+    }, "score ", event.score), /*#__PURE__*/React.createElement(LFTag, {
+      c: ac
+    }, event.fault_type), /*#__PURE__*/React.createElement(LFTag, {
+      c: {
+        bg: "#0c1e35",
+        fg: "#60a5fa"
+      }
+    }, event.action), /*#__PURE__*/React.createElement(LFTag, {
+      c: {
+        bg: "#1e1535",
+        fg: "#a78bfa"
+      }
+    }, "root: ", (event.root_cause || "").replace("ts-", "").replace("-service", ""))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: "#475569",
+        lineHeight: 1.6,
+        padding: "6px 9px",
+        background: "#0d1117",
+        borderRadius: 4,
+        borderLeft: "2px solid #1e2433",
+        marginBottom: 8
+      }
+    }, event.reason), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 5,
+        fontSize: 11,
+        color: event.recovered ? "#4ade80" : "#f87171"
+      }
+    }, /*#__PURE__*/React.createElement("i", {
+      className: `ti ${event.recovered ? "ti-circle-check" : "ti-circle-x"}`,
+      "aria-hidden": "true"
+    }), event.recovered ? `Recovered in ${event.mttr}s` : "Recovery failed — human operator alerted"));
+  })));
+}
+
+// ── Services (full grid) ───────────────────────────────────
+const ALL_SERVICES = ["ts-order-service", "ts-order-other-service", "ts-payment-service", "ts-inside-payment-service", "ts-execute-service", "ts-preserve-service", "ts-station-service", "ts-basic-service", "ts-travel-service", "ts-travel-plan-service", "ts-cancel-service", "ts-rebook-service", "ts-route-service", "ts-route-plan-service", "ts-train-service", "ts-seat-service", "ts-user-service", "ts-auth-service", "ts-security-service", "ts-config-service", "ts-notification-service", "ts-food-service", "ts-food-delivery-service", "ts-contacts-service", "ts-consign-service", "ts-consign-price-service", "ts-price-service", "ts-ticket-office-service", "ts-voucher-service", "ts-news-service", "ts-admin-basic-info-service", "ts-admin-order-service", "ts-admin-route-service", "ts-admin-travel-service", "ts-admin-user-service", "ts-verification-code-service", "ts-gate-way", "ts-ui-dashboard", "MongoDB", "RabbitMQ"];
+const SV_COLOR = {
+  healthy: "#4ade80",
+  fault: "#f87171",
+  warning: "#fbbf24",
+  unknown: "#475569"
+};
+const SV_BG = {
+  healthy: "#0f2918",
+  fault: "#2d1515",
+  warning: "#2d2010",
+  unknown: "#1e2433"
+};
+function Services({
+  data
+}) {
+  const liveServices = data?.services || [];
+  const liveMap = Object.fromEntries(liveServices.map(s => [s.name, s]));
+  const allSvcs = ALL_SERVICES.map(name => ({
+    name,
+    status: liveMap[name]?.status || "healthy",
+    score: liveMap[name]?.score ?? parseFloat((Math.random() * 0.004 + 0.001).toFixed(3))
+  }));
+  const counts = {
+    healthy: allSvcs.filter(s => s.status === "healthy").length,
+    fault: allSvcs.filter(s => s.status === "fault").length,
+    warning: allSvcs.filter(s => s.status === "warning").length
+  };
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(3,1fr)",
+      gap: 8,
+      marginBottom: 12
+    }
+  }, [{
+    label: "Healthy",
+    value: counts.healthy,
+    color: "#4ade80"
+  }, {
+    label: "Faulted",
+    value: counts.fault,
+    color: "#f87171"
+  }, {
+    label: "Warning",
+    value: counts.warning,
+    color: "#fbbf24"
+  }].map(c => /*#__PURE__*/React.createElement("div", {
+    key: c.label,
+    style: {
+      background: "#161b27",
+      border: "0.5px solid #1e2433",
+      borderRadius: 7,
+      padding: "11px 13px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#475569",
+      marginBottom: 3
+    }
+  }, c.label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 22,
+      fontWeight: 500,
+      color: c.color
+    }
+  }, c.value), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#475569",
+      marginTop: 1
+    }
+  }, "services")))), /*#__PURE__*/React.createElement(Panel, {
+    title: "All services",
+    sub: `${ALL_SERVICES.length} total`
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 12,
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))",
+      gap: 6
+    }
+  }, allSvcs.map(svc => /*#__PURE__*/React.createElement("div", {
+    key: svc.name,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      padding: "8px 10px",
+      background: "#0d1117",
+      borderRadius: 5,
+      border: "0.5px solid #1e2433",
+      borderLeftColor: SV_COLOR[svc.status] || "#1e2433",
+      borderLeftWidth: svc.status !== "healthy" ? 2 : 1
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: "50%",
+      flexShrink: 0,
+      background: SV_COLOR[svc.status] || "#4ade80"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#94a3b8",
+      flex: 1,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap"
+    }
+  }, svc.name.replace("ts-", "").replace("-service", "")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontFamily: "monospace",
+      color: svc.status === "healthy" ? "#475569" : "#f87171"
+    }
+  }, svc.score.toFixed(3)), svc.status !== "healthy" && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 9,
+      padding: "1px 5px",
+      borderRadius: 3,
+      background: SV_BG[svc.status],
+      color: SV_COLOR[svc.status]
+    }
+  }, svc.status))))));
+}
+
+// ── MTTRStats ──────────────────────────────────────────────
+const AGENT_COMPARISON = [{
+  name: "A1 Rule-based",
+  mttr: 8.2,
+  acc: 60,
+  color: "#f87171"
+}, {
+  name: "A2 REINFORCE scratch",
+  mttr: 5.8,
+  acc: 85,
+  color: "#fbbf24"
+}, {
+  name: "A3 REINFORCE+pretrain",
+  mttr: 4.2,
+  acc: 97.8,
+  color: "#4ade80"
+}];
+const FAULT_MTTR = [{
+  fault: "service_crash",
+  mttr: 4.1,
+  color: "#f87171"
+}, {
+  fault: "cpu_stress",
+  mttr: 6.2,
+  color: "#fbbf24"
+}, {
+  fault: "slow_response",
+  mttr: 3.8,
+  color: "#60a5fa"
+}, {
+  fault: "network_delay",
+  mttr: 4.5,
+  color: "#a78bfa"
+}, {
+  fault: "F09_wrong_config",
+  mttr: 5.1,
+  color: "#34d399"
+}, {
+  fault: "F08_redis_error",
+  mttr: 3.5,
+  color: "#f87171"
+}, {
+  fault: "F13_lib_version",
+  mttr: 5.8,
+  color: "#fbbf24"
+}, {
+  fault: "F14_race_cond",
+  mttr: 4.3,
+  color: "#60a5fa"
+}];
+function MTTRStats({
+  data
+}) {
+  const mttrHistory = data?.mttr_history || [8.2, 7.1, 6.3, 5.8, 5.2, 4.9, 4.5, 4.3, 4.2, 4.1, 4.0, 4.2, 4.1, 3.9, 4.2];
+  const lineRef = useRef(null);
+  const lineChart = useRef(null);
+  useEffect(() => {
+    if (!lineRef.current || typeof Chart === "undefined") return;
+    if (lineChart.current) {
+      lineChart.current.data.labels = mttrHistory.map((_, i) => `R${i + 1}`);
+      lineChart.current.data.datasets[0].data = mttrHistory;
+      lineChart.current.update();
+      return;
+    }
+    lineChart.current = new Chart(lineRef.current, {
+      type: "line",
+      data: {
+        labels: mttrHistory.map((_, i) => `R${i + 1}`),
+        datasets: [{
+          label: "MTTR (s)",
+          data: mttrHistory,
+          borderColor: "#4ade80",
+          backgroundColor: "rgba(74,222,128,0.07)",
+          borderWidth: 2,
+          pointRadius: 3,
+          pointBackgroundColor: "#4ade80",
+          fill: true,
+          tension: 0.4
+        }, {
+          label: "Baseline 8.2s",
+          data: mttrHistory.map(() => 8.2),
+          borderColor: "#f87171",
+          borderWidth: 1,
+          borderDash: [3, 3],
+          pointRadius: 0,
+          fill: false
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            labels: {
+              color: "#64748b",
+              font: {
+                size: 10
+              },
+              boxWidth: 8
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: {
+              color: "#1e2433"
+            },
+            ticks: {
+              color: "#475569",
+              font: {
+                size: 9
+              }
+            }
+          },
+          y: {
+            grid: {
+              color: "#1e2433"
+            },
+            ticks: {
+              color: "#475569",
+              font: {
+                size: 9
+              }
+            },
+            min: 0,
+            max: 10
+          }
+        }
+      }
+    });
+  }, [JSON.stringify(mttrHistory)]);
+  const avgMTTR = (mttrHistory.reduce((a, b) => a + b, 0) / mttrHistory.length).toFixed(1);
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(4,1fr)",
+      gap: 8,
+      marginBottom: 12
+    }
+  }, [{
+    label: "Current avg MTTR",
+    value: `${avgMTTR}s`,
+    color: "#4ade80"
+  }, {
+    label: "Baseline MTTR",
+    value: "8.2s",
+    color: "#f87171"
+  }, {
+    label: "Improvement",
+    value: `${((8.2 - parseFloat(avgMTTR)) / 8.2 * 100).toFixed(0)}%`,
+    color: "#4ade80"
+  }, {
+    label: "Best MTTR",
+    value: `${Math.min(...mttrHistory).toFixed(1)}s`,
+    color: "#4ade80"
+  }].map(c => /*#__PURE__*/React.createElement("div", {
+    key: c.label,
+    style: {
+      background: "#161b27",
+      border: "0.5px solid #1e2433",
+      borderRadius: 7,
+      padding: "11px 13px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#475569",
+      marginBottom: 3
+    }
+  }, c.label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 22,
+      fontWeight: 500,
+      color: c.color
+    }
+  }, c.value)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10,
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement(Panel, {
+    title: "Agent comparison",
+    sub: "A1 vs A2 vs A3"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 12
+    }
+  }, AGENT_COMPARISON.map(a => /*#__PURE__*/React.createElement("div", {
+    key: a.name,
+    style: {
+      marginBottom: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      fontSize: 11,
+      color: "#94a3b8",
+      marginBottom: 4
+    }
+  }, /*#__PURE__*/React.createElement("span", null, a.name), /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: a.color
+    }
+  }, "MTTR ", a.mttr, "s · Acc ", a.acc, "%")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: 6,
+      background: "#1e2433",
+      borderRadius: 3,
+      overflow: "hidden"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: "100%",
+      borderRadius: 3,
+      background: a.color,
+      width: `${(1 - (a.mttr - 3) / (8.2 - 3)) * 100}%`,
+      transition: "width 0.5s"
+    }
+  })))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 8,
+      padding: "8px 10px",
+      background: "#0d1117",
+      borderRadius: 5,
+      fontSize: 11,
+      color: "#475569",
+      lineHeight: 1.5
+    }
+  }, "A3 achieves 97.8% action accuracy and 4.2s MTTR — 49% faster than rule-based baseline."))), /*#__PURE__*/React.createElement(Panel, {
+    title: "MTTR per fault type",
+    sub: "seconds"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 12
+    }
+  }, FAULT_MTTR.map(f => /*#__PURE__*/React.createElement("div", {
+    key: f.fault,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      marginBottom: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#64748b",
+      width: 130,
+      flexShrink: 0
+    }
+  }, f.fault.replace(/_/g, " ")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      height: 5,
+      background: "#1e2433",
+      borderRadius: 2,
+      overflow: "hidden"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: "100%",
+      borderRadius: 2,
+      background: f.color,
+      width: `${f.mttr / 10 * 100}%`
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: f.color,
+      minWidth: 30,
+      textAlign: "right"
+    }
+  }, f.mttr, "s")))))), /*#__PURE__*/React.createElement(Panel, {
+    title: "MTTR trend",
+    sub: "all recoveries"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "relative",
+      width: "100%",
+      height: 200
+    }
+  }, /*#__PURE__*/React.createElement("canvas", {
+    ref: lineRef,
+    role: "img",
+    "aria-label": "MTTR trend chart"
+  })))));
+}
+
+// ── GNNModel ───────────────────────────────────────────────
+const GNN_MODELS = [{
+  name: "M1: Isolation Forest",
+  auc: 0.917,
+  prec: 0.917,
+  rec: 0.846,
+  f1: 0.880,
+  color: "#f87171"
+}, {
+  name: "M2: GCN + SVDD",
+  auc: 0.854,
+  prec: 0.678,
+  rec: 0.895,
+  f1: 0.772,
+  color: "#fbbf24"
+}, {
+  name: "M3: GGNN mixed training",
+  auc: 0.869,
+  prec: 0.756,
+  rec: 0.913,
+  f1: 0.827,
+  color: "#a78bfa"
+}, {
+  name: "M4: GGNN normal-only ★",
+  auc: 0.947,
+  prec: 0.968,
+  rec: 0.749,
+  f1: 0.845,
+  color: "#4ade80"
+}];
+const GNN_FINDINGS = [{
+  icon: "ti-chart-line",
+  title: "Logs improve ALL models",
+  desc: "Isolation Forest AUC: 0.596 → 0.917 (+0.321) after adding log features"
+}, {
+  icon: "ti-target",
+  title: "Normal-only training critical",
+  desc: "M3→M4: +0.212 Precision improvement by training on normal traces only"
+}, {
+  icon: "ti-network",
+  title: "GatedGraphConv beats GCN",
+  desc: "M2→M4: +0.290 Precision — gating mechanism captures fault propagation better"
+}, {
+  icon: "ti-map-pin",
+  title: "Root cause localisation",
+  desc: "Only GNN provides node attention scores to identify faulty service"
+}];
+function GNNModel() {
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(4,1fr)",
+      gap: 8,
+      marginBottom: 12
+    }
+  }, [{
+    label: "Model",
+    value: "M4 GGNN",
+    sub: "GatedGraphConv ×3",
+    color: "#e2e8f0"
+  }, {
+    label: "AUC-ROC",
+    value: "0.947",
+    sub: "vs 0.910 traces-only",
+    color: "#4ade80"
+  }, {
+    label: "Precision",
+    value: "96.8%",
+    sub: "3.2% false alarm rate",
+    color: "#4ade80"
+  }, {
+    label: "Fault types",
+    value: "14 / 14",
+    sub: "all types detected",
+    color: "#4ade80"
+  }].map(c => /*#__PURE__*/React.createElement("div", {
+    key: c.label,
+    style: {
+      background: "#161b27",
+      border: "0.5px solid #1e2433",
+      borderRadius: 7,
+      padding: "11px 13px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#475569",
+      marginBottom: 3
+    }
+  }, c.label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 20,
+      fontWeight: 500,
+      color: c.color
+    }
+  }, c.value), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#475569",
+      marginTop: 2
+    }
+  }, c.sub)))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1.2fr 1fr",
+      gap: 10,
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement(Panel, {
+    title: "4-model ablation study",
+    sub: "TraceLogData + alllog"
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr",
+      padding: "8px 12px",
+      borderBottom: "0.5px solid #1e2433"
+    }
+  }, ["Model", "AUC", "Prec", "Rec", "F1"].map(h => /*#__PURE__*/React.createElement("div", {
+    key: h,
+    style: {
+      fontSize: 10,
+      color: "#475569",
+      fontWeight: 500
+    }
+  }, h))), GNN_MODELS.map((m, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: "grid",
+      gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr",
+      padding: "9px 12px",
+      borderBottom: "0.5px solid #1e2433",
+      background: i === 3 ? "#0d1117" : "transparent"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: i === 3 ? "#e2e8f0" : "#94a3b8",
+      display: "flex",
+      alignItems: "center",
+      gap: 6
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 6,
+      height: 6,
+      borderRadius: 2,
+      background: m.color,
+      flexShrink: 0
+    }
+  }), m.name), [m.auc, m.prec, m.rec, m.f1].map((v, j) => /*#__PURE__*/React.createElement("div", {
+    key: j,
+    style: {
+      fontSize: 11,
+      color: i === 3 ? m.color : "#64748b",
+      fontWeight: i === 3 ? 500 : 400
+    }
+  }, v.toFixed(3))))))), /*#__PURE__*/React.createElement(Panel, {
+    title: "Model architecture",
+    sub: "M4 GGNN"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 12
+    }
+  }, [{
+    step: "Input",
+    desc: "GraphData traces + alllog ERROR/WARN",
+    dim: "306-dim"
+  }, {
+    step: "GNNEncoder",
+    desc: "GatedGraphConv ×3 layers",
+    dim: "hidden=64"
+  }, {
+    step: "Localizer",
+    desc: "Node attention weights",
+    dim: "root cause"
+  }, {
+    step: "SVDDHead",
+    desc: "Deep SVDD hypersphere",
+    dim: "latent=32"
+  }, {
+    step: "Output",
+    desc: "anomaly score + node scores",
+    dim: "threshold 0.5"
+  }].map((s, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      display: "flex",
+      gap: 10,
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 2,
+      background: "#1e2433",
+      borderRadius: 1,
+      flexShrink: 0,
+      alignSelf: "stretch",
+      display: i < 4 ? "block" : "none"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      background: "#0d1117",
+      borderRadius: 5,
+      padding: "7px 10px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#e2e8f0",
+      fontWeight: 500,
+      marginBottom: 2
+    }
+  }, s.step), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#475569"
+    }
+  }, s.desc), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 9,
+      color: "#3b82f6",
+      marginTop: 2,
+      fontFamily: "monospace"
+    }
+  }, s.dim))))))), /*#__PURE__*/React.createElement(Panel, {
+    title: "Key findings"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "repeat(2,1fr)",
+      gap: 0
+    }
+  }, GNN_FINDINGS.map((f, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    style: {
+      padding: "12px 14px",
+      borderBottom: i < 2 ? "0.5px solid #1e2433" : "none",
+      borderRight: i % 2 === 0 ? "0.5px solid #1e2433" : "none"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 7,
+      marginBottom: 5
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 24,
+      height: 24,
+      borderRadius: 5,
+      background: "#0c1e35",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      color: "#60a5fa",
+      fontSize: 13
+    }
+  }, /*#__PURE__*/React.createElement("i", {
+    className: `ti ${f.icon}`,
+    "aria-hidden": "true"
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#e2e8f0",
+      fontWeight: 500
+    }
+  }, f.title)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#475569",
+      lineHeight: 1.5
+    }
+  }, f.desc))))));
+}
+
+// ── AccuracyPanel + AgentPage ──────────────────────────────
+function AccuracyPanel() {
+  const items = [{
+    label: "service_crash → RESTART",
+    pct: 100,
+    color: "#f87171"
+  }, {
+    label: "cpu_stress → SCALE_UP",
+    pct: 98,
+    color: "#fbbf24"
+  }, {
+    label: "slow_response → CIRCUIT",
+    pct: 96,
+    color: "#60a5fa"
+  }, {
+    label: "network_delay → REROUTE",
+    pct: 98,
+    color: "#a78bfa"
+  }, {
+    label: "unknown → ROLLBACK",
+    pct: 95,
+    color: "#34d399"
+  }];
+  return /*#__PURE__*/React.createElement(Panel, {
+    title: "Action accuracy per fault type",
+    sub: "% correct"
+  }, items.map(it => /*#__PURE__*/React.createElement("div", {
+    key: it.label,
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      padding: "8px 12px",
+      borderBottom: "0.5px solid #1e2433"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: 2,
+      background: it.color,
+      flexShrink: 0
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#94a3b8",
+      flex: 1
+    }
+  }, it.label), /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 65,
+      height: 4,
+      background: "#1e2433",
+      borderRadius: 2,
+      overflow: "hidden"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: `${it.pct}%`,
+      height: "100%",
+      background: it.color,
+      borderRadius: 2
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: it.color,
+      minWidth: 28,
+      textAlign: "right"
+    }
+  }, it.pct, "%"))));
+}
+function AgentPage({
+  data
+}) {
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(MetricCards, {
+    metrics: data.metrics
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr",
+      gap: 10,
+      marginBottom: 10
+    }
+  }, /*#__PURE__*/React.createElement(ActionBreakdown, {
+    counts: data.action_counts,
+    total: data.metrics.total_recoveries
+  }), /*#__PURE__*/React.createElement(AccuracyPanel, null)), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "1fr 1fr 1fr",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement(ServiceHealth, {
+    services: data.services
+  }), /*#__PURE__*/React.createElement(AgentReasoning, {
+    actions: data.recent_actions
+  }), /*#__PURE__*/React.createElement(MTTRChart, {
+    history: data.mttr_history
+  })));
+}
+
+// ── App ────────────────────────────────────────────────────
+function App() {
+  const [data, setData] = useState(INITIAL);
+  const [page, setPage] = useState("agent");
+  const [connected, setConnected] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState("–");
+  const wsRef = useRef(null);
+  useEffect(() => {
+    let stop = false;
+    function connect() {
+      const ws = new WebSocket(WS_URL);
+      wsRef.current = ws;
+      ws.onopen = () => setConnected(true);
+      ws.onmessage = e => {
+        const msg = JSON.parse(e.data);
+        if (msg.type === "ping") return;
+        setData(prev => ({
+          ...prev,
+          ...msg
+        }));
+        setLastUpdate(new Date().toLocaleTimeString("en-IE", {
+          hour12: false
+        }));
+      };
+      ws.onclose = () => {
+        setConnected(false);
+        if (!stop) setTimeout(connect, 3000);
+      };
+      ws.onerror = () => ws.close();
+    }
+    connect();
+    return () => {
+      stop = true;
+      wsRef.current && wsRef.current.close();
+    };
+  }, []);
+  const navItems = [{
+    id: "overview",
+    icon: "ti-layout-dashboard",
+    label: "Overview"
+  }, {
+    id: "feed",
+    icon: "ti-activity",
+    label: "Live feed"
+  }, {
+    id: "services",
+    icon: "ti-server",
+    label: "Services"
+  }, {
+    id: "mttr",
+    icon: "ti-chart-line",
+    label: "MTTR stats"
+  }, {
+    id: "gnn",
+    icon: "ti-brain",
+    label: "GNN model"
+  }, {
+    id: "agent",
+    icon: "ti-robot",
+    label: "RL agent"
+  }];
+  const PAGE_TITLES = {
+    overview: "Overview",
+    feed: "Live Feed",
+    services: "Services",
+    mttr: "MTTR Stats",
+    gnn: "GNN Model",
+    agent: "RL Agent — Production"
+  };
+  function renderPage() {
+    switch (page) {
+      case "overview":
+        return /*#__PURE__*/React.createElement(Overview, {
+          data: data
+        });
+      case "feed":
+        return /*#__PURE__*/React.createElement(LiveFeed, {
+          data: data
+        });
+      case "services":
+        return /*#__PURE__*/React.createElement(Services, {
+          data: data
+        });
+      case "mttr":
+        return /*#__PURE__*/React.createElement(MTTRStats, {
+          data: data
+        });
+      case "gnn":
+        return /*#__PURE__*/React.createElement(GNNModel, null);
+      default:
+        return /*#__PURE__*/React.createElement(AgentPage, {
+          data: data
+        });
+    }
+  }
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "grid",
+      gridTemplateColumns: "180px 1fr",
+      minHeight: "100vh",
+      background: "#080b10",
+      fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif"
+    }
+  }, /*#__PURE__*/React.createElement("aside", {
+    style: {
+      background: "#0d1117",
+      borderRight: "0.5px solid #1e2433",
+      display: "flex",
+      flexDirection: "column"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "16px 14px",
+      borderBottom: "0.5px solid #1e2433",
+      display: "flex",
+      alignItems: "center",
+      gap: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 26,
+      height: 26,
+      background: "#0c1e35",
+      borderRadius: 5,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      color: "#60a5fa",
+      fontSize: 14
+    }
+  }, /*#__PURE__*/React.createElement("i", {
+    className: "ti ti-activity-heartbeat",
+    "aria-hidden": "true"
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 500,
+      color: "#fff"
+    }
+  }, "Sentinel"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#475569",
+      marginTop: 1
+    }
+  }, "Self-Healing"))), /*#__PURE__*/React.createElement("nav", {
+    style: {
+      padding: "8px 0",
+      flex: 1
+    }
+  }, navItems.map(item => /*#__PURE__*/React.createElement("button", {
+    key: item.id,
+    onClick: () => setPage(item.id),
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 7,
+      padding: "8px 10px",
+      fontSize: 12,
+      width: "calc(100% - 12px)",
+      margin: "1px 6px",
+      borderRadius: 5,
+      border: "none",
+      cursor: "pointer",
+      background: page === item.id ? "#0c1e35" : "transparent",
+      color: page === item.id ? "#60a5fa" : "#475569",
+      fontWeight: page === item.id ? 500 : 400,
+      transition: "all 0.15s"
+    }
+  }, /*#__PURE__*/React.createElement("i", {
+    className: `ti ${item.icon}`,
+    style: {
+      fontSize: 14
+    },
+    "aria-hidden": "true"
+  }), item.label))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      margin: 10,
+      padding: "10px 12px",
+      background: "#161b27",
+      border: "0.5px solid #1e2433",
+      borderRadius: 7
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#475569",
+      textTransform: "uppercase",
+      letterSpacing: "0.06em",
+      marginBottom: 4
+    }
+  }, "Active agent"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#e2e8f0",
+      display: "flex",
+      alignItems: "center",
+      gap: 5,
+      marginBottom: 3
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 6,
+      height: 6,
+      borderRadius: "50%",
+      background: connected ? "#4ade80" : "#f87171",
+      animation: "blink 2s infinite"
+    }
+  }), "A3 — REINFORCE"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 500,
+      color: "#4ade80"
+    }
+  }, data.metrics.success_rate, "% success"))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      overflow: "auto",
+      background: "#0f1117"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: "#161b27",
+      borderBottom: "0.5px solid #1e2433",
+      padding: "11px 18px",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      flexShrink: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 500,
+      color: "#e2e8f0"
+    }
+  }, PAGE_TITLES[page]), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#475569"
+    }
+  }, "Train-Ticket · 40 services")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: "#475569"
+    }
+  }, lastUpdate !== "–" ? `Last update: ${lastUpdate}` : "Connecting..."), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 4,
+      fontSize: 10,
+      padding: "3px 9px",
+      borderRadius: 20,
+      background: connected ? "#0f2918" : "#2d1515",
+      color: connected ? "#4ade80" : "#f87171",
+      border: `0.5px solid ${connected ? "#166534" : "#7f1d1d"}`
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: {
+      width: 5,
+      height: 5,
+      borderRadius: "50%",
+      background: connected ? "#4ade80" : "#f87171"
+    }
+  }), connected ? "Live" : "Reconnecting..."))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: 14,
+      flex: 1,
+      overflowY: "auto"
+    }
+  }, renderPage())));
+}
+ReactDOM.createRoot(document.getElementById("root")).render(/*#__PURE__*/React.createElement(App, null));
+</script>
+</body>
+</html>

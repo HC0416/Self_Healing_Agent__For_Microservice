@@ -1,0 +1,53 @@
+{
+  "container_prefix": "train-ticket-",
+  "container_suffix": "-1",
+  "verification_timeout_seconds": 60,
+  "verification_interval_seconds": 3,
+  "health_urls": {
+    "ts-auth-service": {
+      "method": "POST",
+      "url": "http://localhost:12340/api/v1/users/login",
+      "json": {
+        "username": "admin",
+        "password": "222222"
+      },
+      "expected_status": [
+        200
+      ]
+    }
+  },
+  "scale_up": {
+    "memory": "2g"
+  },
+  "circuit_break": {
+    "network": "train-ticket_default"
+  },
+  "adaptive_execution": {
+    "enabled": true,
+    "prefer_reroute_for_faults": [
+      "service_crash"
+    ]
+  },
+  "reroute": {
+    "services": {
+      "ts-auth-service": {
+        "backup_container": "train-ticket-ts-auth-service-backup-1",
+        "switch_command": [
+          "python",
+          "-m",
+          "UI.backend.switch_route",
+          "ts-auth-service",
+          "backup"
+        ],
+        "expected_header": {
+          "name": "X-Backend",
+          "value": "backup"
+        }
+      }
+    }
+  },
+  "rollback": {
+    "require_confirmation": true,
+    "manual_only": true
+  }
+}

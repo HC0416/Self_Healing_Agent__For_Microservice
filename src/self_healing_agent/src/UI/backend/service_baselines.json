@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "services": {
+    "ts-verification-code-service": {
+      "baseline": 4.388596741203415e-05,
+      "threshold": 5.635641561457306e-05,
+      "count": 125,
+      "updated_at": "2026-07-14T18:54:25.648099"
+    },
+    "ts-auth-service": {
+      "baseline": 4.3800767862849586e-05,
+      "threshold": 5.635641561457306e-05,
+      "count": 136,
+      "updated_at": "2026-07-14T18:54:25.648110"
+    },
+    "ts-order-service": {
+      "baseline": 9.498922330739705e-05,
+      "threshold": 0.00022865992422157433,
+      "count": 85,
+      "updated_at": "2026-07-14T18:54:25.648116"
+    },
+    "ts-auth-service-backup": {
+      "baseline": 4.83302889329078e-05,
+      "threshold": 5.629397558732308e-05,
+      "count": 50,
+      "updated_at": "2026-07-14T18:54:25.648120"
+    }
+  }
+}

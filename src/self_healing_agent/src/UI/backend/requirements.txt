@@ -1,0 +1,12 @@
+# Dashboard backend
+fastapi
+uvicorn[standard]
+websockets
+
+# Real monitor (already needed by your dynamic_healer.py)
+torch
+torch-geometric
+numpy
+requests
+docker
+shap

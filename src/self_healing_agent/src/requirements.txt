@@ -1,0 +1,9 @@
+docker_py==1.10.6
+fastapi==0.139.0
+numpy==2.5.1
+pydantic==2.13.4
+Requests==2.34.2
+scikit_learn==1.9.0
+torch==2.11.0+cu126
+torch_geometric==2.8.0
+transformers==4.57.6

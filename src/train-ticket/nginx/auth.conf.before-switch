@@ -1,0 +1,21 @@
+upstream auth_backend {
+    server train-ticket-ts-auth-service-1:12340;
+}
+
+server {
+    listen 12340;
+
+    location / {
+        proxy_pass http://auth_backend;
+
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 20s;
+        proxy_send_timeout 20s;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        add_header X-Backend primary always;
+    }
+}

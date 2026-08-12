@@ -1,0 +1,972 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Live Trace Dashboard</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/3.44.0/tabler-icons.min.css" />
+<style>
+:root{
+  --bg:#080b10; --sidebar:#0d1117; --panel:#161b27; --panel-dark:#0d1117;
+  --border:#1e2433; --text:#e2e8f0; --muted:#475569; --muted2:#64748b;
+  --green:#4ade80; --red:#f87171; --yellow:#fbbf24; --blue:#60a5fa; --purple:#a78bfa;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;font-size:13px}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:var(--sidebar)}
+::-webkit-scrollbar-thumb{background:#2d3748;border-radius:3px}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes fadein{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.wrap{display:grid;grid-template-columns:190px 1fr;min-height:100vh}
+
+/* Sidebar */
+.side{background:var(--sidebar);border-right:.5px solid var(--border);display:flex;flex-direction:column}
+.brand{display:flex;align-items:center;gap:9px;padding:16px 14px;border-bottom:.5px solid var(--border)}
+.brand .logo{width:28px;height:28px;background:#0c1e35;border-radius:6px;display:flex;
+  align-items:center;justify-content:center;color:var(--blue);font-size:15px}
+.brand .name{font-size:14px;font-weight:600;color:#fff}
+.brand .tag{font-size:10px;color:var(--muted);margin-top:1px}
+.nav{padding:8px 0;flex:1}
+.nav .item{display:flex;align-items:center;gap:8px;margin:1px 6px;padding:8px 10px;border-radius:6px;
+  font-size:12px;color:var(--blue);background:#0c1e35;font-weight:500}
+.nav .item i{font-size:15px}
+.side .status-card{margin:10px;padding:11px 12px;background:var(--panel);border:.5px solid var(--border);border-radius:8px}
+.side .status-card .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px}
+.side .status-card .row{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text)}
+.side .status-card .row .d{width:6px;height:6px;border-radius:50%;animation:blink 2s infinite}
+
+/* Main */
+.main{display:flex;flex-direction:column;background:#0f1117;overflow:hidden}
+.topbar{background:var(--panel);border-bottom:.5px solid var(--border);padding:11px 18px;
+  display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.topbar .title{font-size:13px;font-weight:600;color:var(--text)}
+.topbar .subtitle{font-size:11px;color:var(--muted);margin-top:1px}
+.topbar .right{display:flex;align-items:center;gap:10px}
+.topbar .upd{font-size:11px;color:var(--muted)}
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:10px;padding:3px 9px;border-radius:20px}
+.badge .d{width:5px;height:5px;border-radius:50%}
+.badge.live{background:#0f2918;color:var(--green);border:.5px solid #166534}
+.badge.dead{background:#2d1515;color:var(--red);border:.5px solid #7f1d1d}
+
+.content{padding:14px;overflow-y:auto;flex:1}
+
+/* Metric cards */
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
+.metric{background:var(--panel);border:.5px solid var(--border);border-radius:7px;padding:11px 13px}
+.metric .l{font-size:10px;color:var(--muted);margin-bottom:3px}
+.metric .v{font-size:22px;font-weight:600}
+.metric .s{font-size:10px;color:var(--muted);margin-top:2px}
+
+/* Layout */
+.layout{display:grid;grid-template-columns:1.4fr .6fr;gap:12px}
+@media(max-width:1100px){.layout{grid-template-columns:1fr}.wrap{grid-template-columns:1fr}}
+@media(max-width:640px){.metrics{grid-template-columns:repeat(2,1fr)}}
+
+.panel{background:var(--panel);border:.5px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:12px}
+.panel h2{font-size:12px;font-weight:600;margin:0;padding:10px 13px;border-bottom:.5px solid var(--border);
+  display:flex;justify-content:space-between;align-items:center}
+.panel h2 span{font-size:10px;color:var(--muted);font-weight:400}
+.toolbar{display:flex;gap:8px;padding:9px 12px;border-bottom:.5px solid var(--border)}
+input,select{background:var(--panel-dark);border:.5px solid var(--border);color:var(--text);
+  border-radius:6px;padding:7px 9px;font-size:12px;font-family:inherit}
+input{flex:1}
+input::placeholder{color:var(--muted)}
+
+/* Table */
+.tablewrap{max-height:600px;overflow:auto}
+.table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{padding:8px 11px;border-bottom:.5px solid var(--border);text-align:left;vertical-align:middle}
+th{color:var(--muted);font-weight:500;background:var(--panel-dark);position:sticky;top:0;z-index:1;font-size:10px;
+  text-transform:uppercase;letter-spacing:.04em}
+tr:hover td{background:var(--panel-dark)}
+.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.small{font-size:11px;color:var(--muted)}
+.status{font-weight:600;border-radius:4px;padding:2px 7px;font-size:10px;display:inline-block}
+.NORMAL{background:#0f2918;color:var(--green)}
+.WARMUP,.BASELINE_RESET{background:#2d2010;color:var(--yellow)}
+.WARNING{background:#2d2010;color:var(--yellow)}
+.ANOMALY{background:#2d1515;color:var(--red)}
+.traceid{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.empty{padding:26px;text-align:center;color:var(--muted);font-size:12px}
+
+.fault{
+  display:inline-block;
+  padding:2px 8px;
+  border-radius:4px;
+  font-size:10px;
+  font-weight:600;
+  border:1px solid;
+}
+
+.fault.green{
+  color:var(--green);
+  background:#0f2918;
+  border-color:#166534;
+  border: none
+}
+
+.fault.red{
+  color:var(--red);
+  background:#2d1515;
+  border-color:#7f1d1d;
+  border:none
+}
+
+.fault.none{
+  padding:0;
+  border:none;
+  background:none;
+  color:var(--muted);
+  font-weight:400;
+}
+
+.action-badge{
+    display:inline-block;
+    font-size:9px;
+    padding:1px 6px;
+    border-radius:3px;
+    font-weight:500;
+    background:rgb(12,30,53);
+    color:rgb(96,165,250);
+    margin-right:3px;
+}
+
+.action-none{
+    color:var(--muted);
+    font-size:11px;
+}
+
+.root-cause{
+    display:inline-block;
+    padding:2px 6px;
+    border-radius:3px;
+    border:1px solid var(--purple);
+    background:rgba(167,139,250,.12);
+    color:var(--purple);
+    font-size:11px;
+    font-weight:500;
+    border: none;
+}
+
+.time-badge{
+    display:inline-block;
+    padding:2px 6px;
+    border-radius:3px;
+    border:1px solid #ca8a04;
+    background:rgba(250,204,21,.12);
+    color:var(--yellow);
+    font-size:11px;
+    font-weight:500;
+    border: none;
+    white-space: nowrap;
+}
+
+.score-badge{
+    display:inline-block;
+    padding:2px 6px;
+    border-radius:3px;
+    border:1px solid #991b1b;
+    background:rgba(248,113,113,.12);
+    color:var(--red);
+    font-size:11px;
+    font-weight:500;
+    border:none;
+}
+
+
+.trace-key{
+    display:inline-block;
+    font-size:9px;
+    padding:1px 6px;
+    border-radius:3px;
+    font-weight:600;
+    background:#102032;
+    color:#93c5fd;
+    margin-right:3px;
+}
+
+.event-toolbar{
+    display:flex;
+    gap:8px;
+    padding:9px 12px;
+    border-bottom:.5px solid var(--border);
+}
+
+.root-cause-none{
+    color:var(--muted);
+}
+
+.recovery-status-badge{
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
+  padding:2px 7px;
+  border-radius:4px;
+  font-size:9px;
+  font-weight:600;
+  border:1px solid;
+  white-space:nowrap;
+}
+.recovery-status-badge.success{
+  color:var(--green);
+  background:#0f2918;
+  border-color:#166534;
+}
+.recovery-status-badge.failed{
+  color:var(--red);
+  background:#2d1515;
+  border-color:#7f1d1d;
+}
+.recovery-status-badge.pending{
+  color:var(--yellow);
+  background:#2d2010;
+  border-color:#854d0e;
+}
+.recovery-status-badge.manual{
+  color:var(--yellow);
+  background:#2d2010;
+  border-color:#854d0e;
+}
+.recovery-spinner{
+  width:9px;
+  height:9px;
+  border:1.5px solid currentColor;
+  border-right-color:transparent;
+  border-radius:50%;
+  animation:spin .8s linear infinite;
+}
+.recovery-status-badge.none{
+  padding:0;
+  border:none;
+  background:none;
+  color:var(--muted);
+  font-weight:400;
+}
+
+.mttr-badge{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:62px;
+
+  padding:2px 7px;
+  border-radius:4px;
+  font-size:9px;
+  font-weight:600;
+  border:1px solid;
+  white-space:nowrap;
+}
+
+.mttr-badge.success{
+  color:var(--green);
+  background:#0f2918;
+  border-color:#166534;
+}
+
+.mttr-badge.none{
+  color:var(--muted);
+  background:transparent;
+  border:none;
+}
+
+.recovery-summary{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:5px;
+  margin-top:7px;
+  justify-content:flex-end;
+}
+.recovery-time{
+  display:inline-block;
+  padding:2px 6px;
+  border-radius:3px;
+  background:rgba(74,222,128,.10);
+  color:var(--green);
+  font-size:10px;
+  font-weight:500;
+}
+.recovery-time.failed{
+  background:rgba(248,113,113,.10);
+  color:var(--red);
+}
+
+
+/* SHAP detail modal */
+.modal-backdrop{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.62);
+  display:none;
+  align-items:center;
+  justify-content:center;
+  z-index:9999;
+  padding:20px;
+}
+.modal-backdrop.open{display:flex}
+.modal{
+  width:min(880px,96vw);
+  max-height:88vh;
+  overflow:auto;
+  background:var(--panel);
+  border:.5px solid var(--border);
+  border-radius:10px;
+  box-shadow:0 22px 60px rgba(0,0,0,.55);
+}
+.modal-head{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:14px;
+  padding:14px 16px;
+  border-bottom:.5px solid var(--border);
+  background:var(--panel-dark);
+}
+.modal-title{font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px}
+.modal-sub{font-size:11px;color:var(--muted)}
+.modal-close{
+  border:.5px solid var(--border);
+  background:#101827;
+  color:var(--muted2);
+  border-radius:6px;
+  padding:5px 8px;
+  cursor:pointer;
+}
+.modal-close:hover{color:var(--text);background:#172033}
+.modal-body{padding:14px 16px}
+.detail-grid{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:8px;
+  margin-bottom:12px;
+}
+.detail-card{
+  background:var(--panel-dark);
+  border:.5px solid var(--border);
+  border-radius:7px;
+  padding:10px;
+}
+.detail-card .label{font-size:10px;color:var(--muted);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em}
+.detail-card .value{font-size:12px;color:var(--text);word-break:break-word}
+.shap-box{
+  background:var(--panel-dark);
+  border:.5px solid var(--border);
+  border-radius:7px;
+  padding:11px;
+  margin-top:10px;
+}
+.shap-box h3{font-size:12px;margin:0 0 8px 0;color:var(--text)}
+.shap-reason{
+  font-size:12px;
+  color:var(--muted2);
+  line-height:1.55;
+  white-space:pre-wrap;
+}
+.shap-table{
+  margin-top:8px;
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+  font-size:11px;
+  line-height:1.45;
+  color:#cbd5e1;
+  white-space:pre-wrap;
+  background:#090d14;
+  border:.5px solid var(--border);
+  border-radius:6px;
+  padding:9px;
+}
+.event{cursor:pointer}
+.event:hover{background:var(--panel-dark)}
+@media(max-width:720px){.detail-grid{grid-template-columns:1fr}}
+
+/* Recovery status */
+.recovery-box{
+  background:var(--panel-dark);
+  border:.5px solid var(--border);
+  border-radius:7px;
+  padding:11px;
+  margin-top:10px;
+}
+.recovery-box h3{font-size:12px;margin:0 0 10px 0;color:var(--text)}
+.recovery-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.recovery-item{background:#090d14;border:.5px solid var(--border);border-radius:6px;padding:9px;min-height:64px}
+.recovery-item.wide{grid-column:1/-1}
+.recovery-item .label{font-size:10px;color:var(--muted);margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em}
+.recovery-item .value{font-size:12px;color:var(--text);word-break:break-word;line-height:1.45}
+.result-badge{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;border:1px solid}
+.result-badge.ok{color:var(--green);background:#0f2918;border-color:#166534}
+.result-badge.bad{color:var(--red);background:#2d1515;border-color:#7f1d1d}
+.result-badge.pending{color:var(--yellow);background:#2d2010;border-color:#854d0e}
+.result-badge.manual{color:var(--yellow);background:#2d2010;border-color:#854d0e}
+.recovery-message{color:var(--muted2);white-space:pre-wrap}
+@media(max-width:720px){.recovery-grid{grid-template-columns:1fr}.recovery-item.wide{grid-column:auto}}
+
+/* Service scores */
+.svc{display:flex;justify-content:space-between;gap:8px;padding:9px 13px;border-bottom:.5px solid var(--border);font-size:12px}
+.svc b{font-weight:500;color:var(--text)}
+.svc .right{text-align:right}
+.bar{height:5px;background:#1f2937;border-radius:99px;overflow:hidden;margin-top:6px;width:110px}
+.bar>div{height:100%;background:var(--blue);width:0%;transition:width .4s}
+.svcs{max-height:290px;overflow:auto}
+
+/* Events */
+.events{max-height:340px;overflow:auto}
+.event{padding:10px 13px;border-bottom:.5px solid var(--border);animation:fadein .3s ease}
+.event .top{display:flex;justify-content:space-between;gap:10px;font-size:12px;align-items:center}
+.event .top b{font-weight:500}
+.event .action{color:var(--purple);font-weight:600;font-size:11px}
+.event .meta{font-size:10px;color:var(--muted);margin-top:4px}
+.event .reason{font-size:11px;color:var(--muted2);margin-top:6px;line-height:1.5;
+  padding:6px 8px;background:var(--panel-dark);border-radius:4px;border-left:2px solid var(--border)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- Sidebar -->
+  <aside class="side">
+    <div class="brand">
+      <div class="logo"><i class="ti ti-activity-heartbeat"></i></div>
+      <div>
+        <div class="name">Sentinel</div>
+        <div class="tag">Self-Healing</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <div class="item"><i class="ti ti-activity"></i> Live traces</div>
+    </nav>
+    <div class="status-card">
+      <div class="lbl">Connection</div>
+      <div class="row" id="connRow"><span class="d" style="background:var(--red)"></span><span id="connText">Connecting…</span></div>
+    </div>
+  </aside>
+
+  <!-- Main -->
+  <div class="main">
+    <div class="topbar">
+      <div>
+        <div class="title">Live Traces</div>
+        <div class="subtitle">Train-Ticket · SkyWalking</div>
+      </div>
+      <div class="right">
+        <span class="upd" id="updText">Connecting…</span>
+        <span class="badge dead" id="badge"><span class="d" style="background:var(--red)"></span><span id="badgeText">Reconnecting</span></span>
+      </div>
+    </div>
+
+    <div class="content">
+      <!-- Metric cards -->
+      <div class="metrics">
+        <div class="metric"><div class="l">Total traces</div><div class="v" id="mTotal">0</div><div class="s">this session</div></div>
+        <div class="metric"><div class="l">Normal</div><div class="v" id="mNormal" style="color:var(--green)">0</div><div class="s">below threshold</div></div>
+        <div class="metric"><div class="l">Anomalies</div><div class="v" id="mAnom" style="color:var(--red)">0</div><div class="s">above threshold</div></div>
+        <div class="metric"><div class="l">Last update</div><div class="v" id="mTime" style="font-size:17px">–</div><div class="s">live feed</div></div>
+      </div>
+
+      <div class="layout">
+        <!-- Live traces -->
+        <section class="panel" style="margin-bottom:0">
+          <h2>Live traces <span id="traceCount">0 shown</span></h2>
+          <div class="toolbar">
+            <input id="filter" placeholder="Filter service, root cause, trace id…" />
+            <select id="statusFilter">
+              <option value="ALL">All</option>
+              <option value="NORMAL">Normal</option>
+              <option value="WARMUP">Warm-up</option>
+              <option value="ANOMALY">Anomaly</option>
+            </select>
+          </div>
+          <div class="tablewrap">
+            <table class="table">
+              <thead><tr>
+                <th>Key</th><th>Time</th><th>Status</th><th>Service</th><th>Score</th>
+                <th>Threshold</th><th>Duration</th><th>Root cause</th><th>Fault type</th><th>Action</th><th>Recovery</th><th>MTTR</th><th>Trace ID</th>
+              </tr></thead>
+              <tbody id="traceBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- Right column -->
+        <div>
+          <section class="panel">
+            <h2>Service scores <span id="svcCount">0 services</span></h2>
+            <div class="svcs" id="services"></div>
+          </section>
+          <section class="panel" style="margin-bottom:0">
+            <h2>Recovery events <span id="eventCount">0 events</span></h2>
+            <div class="event-toolbar">
+              <input id="eventFilter" placeholder="Search recovery by key, service, action, fault…" />
+            </div>
+            <div class="events" id="events"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- SHAP detail modal -->
+<div class="modal-backdrop" id="detailModal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+  <div class="modal">
+    <div class="modal-head">
+      <div>
+        <div class="modal-title" id="modalTitle">Trace explanation</div>
+        <!-- <div class="modal-sub">GNN anomaly → RL action → SHAP reasoning</div> -->
+      </div>
+      <button class="modal-close" id="modalClose" type="button">Close</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<script>
+const WS_URL = "ws://localhost:8000/ws/dashboard";
+let state = { recent_traces:[], services:[], recent_actions:[] };
+let traceKeyMap = {};
+let traceKeyCounter = 1001;
+
+function getTraceKey(traceId){
+  if (!traceId) return "—";
+  if (!traceKeyMap[traceId]) {
+    traceKeyMap[traceId] = "T" + traceKeyCounter++;
+  }
+  return traceKeyMap[traceId];
+}
+
+const $ = id => document.getElementById(id);
+let eventDetailMap = {};
+
+function escapeHtml(value){
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function badgeFault(fault){
+  fault = fault || "—";
+  if (fault === "—") return `<span class="fault none">—</span>`;
+  if (fault === "normal") return `<span class="fault green">normal</span>`;
+  return `<span class="fault red">${escapeHtml(fault)}</span>`;
+}
+
+function badgeAction(action){
+  action = action || "—";
+  return action === "—"
+    ? `<span class="action-none">—</span>`
+    : `<span class="action-badge">${escapeHtml(action)}</span>`;
+}
+
+function badgeRoot(root){
+  root = root || "—";
+  return root === "—"
+    ? `<span class="root-cause-none">—</span>`
+    : `<span class="root-cause">${escapeHtml(root)}</span>`;
+}
+
+function resultBadge(value, successText, failureText, recoveryStatus){
+  if (recoveryStatus === "manual_required") {
+    return `<span class="result-badge manual">! Manual action required</span>`;
+  }
+  if (recoveryStatus === "recovering") {
+    return `<span class="result-badge pending"><span class="recovery-spinner"></span> Recovering</span>`;
+  }
+  if (value === true) return `<span class="result-badge ok">✓ ${escapeHtml(successText)}</span>`;
+  if (value === false) return `<span class="result-badge bad">✕ ${escapeHtml(failureText)}</span>`;
+  return `<span class="result-badge pending">— Not reported</span>`;
+}
+
+function formatMttr(value){
+  if (value === null || value === undefined || value === "") return "—";
+  const num = Number(value);
+  return Number.isFinite(num) ? `${num.toFixed(2)} s` : "—";
+}
+
+function recoveryTarget(e){
+  const details = e.recovery_details || {};
+  const manualRequired =
+    e.recovery_status === "manual_required" ||
+    e.manual_required === true ||
+    details.manual_required === true ||
+    details.approval_required === true;
+
+  if (manualRequired) return "Operator";
+
+  return e.target || details.container || details.target || details.backup || "—";
+}
+
+function verificationMethod(e){
+  const details = e.recovery_details || {};
+  const manualRequired =
+    e.recovery_status === "manual_required" ||
+    e.manual_required === true ||
+    details.manual_required === true ||
+    details.approval_required === true;
+
+  if (manualRequired) {
+    return e.verification_method || details.verification_method || "Operator approval";
+  }
+
+  return e.verification_method || details.verification_method || details.health_url ||
+    (e.verified === true ? "Docker / application health verification" : "—");
+}
+
+function verificationStatus(e){
+  const details = e.recovery_details || {};
+  const manualRequired =
+    e.recovery_status === "manual_required" ||
+    e.manual_required === true ||
+    details.manual_required === true ||
+    details.approval_required === true;
+
+  if (manualRequired) {
+    return e.verification_status || details.verification_status || "Pending manual rollback";
+  }
+
+  if (e.verification_status) return e.verification_status;
+  if (details.verification_status) return details.verification_status;
+  if (e.verified === true) return "Passed";
+  if (e.verified === false) return "Failed";
+  return "—";
+}
+
+function recoveryBadge(e){
+  if (!e) return `<span class="recovery-status-badge none">—</span>`;
+
+  const details = e.recovery_details || {};
+  const manualRequired =
+    e.recovery_status === "manual_required" ||
+    e.manual_required === true ||
+    details.manual_required === true ||
+    details.approval_required === true;
+
+  if (manualRequired) {
+    return `<span class="recovery-status-badge manual">! Manual rollback required</span>`;
+  }
+
+  if (e.recovery_status === "recovering") {
+    return `<span class="recovery-status-badge pending"><span class="recovery-spinner"></span> Recovering</span>`;
+  }
+
+  if (e.verified === true || e.recovered === true) {
+    return `<span class="recovery-status-badge success">✓ Recovered</span>`;
+  }
+
+  if (e.executed === true && e.verified === false) {
+    return `<span class="recovery-status-badge failed">✕ Failed</span>`;
+  }
+
+  if (e.executed === false) {
+    return `<span class="recovery-status-badge failed">✕ Not executed</span>`;
+  }
+
+  return `<span class="recovery-status-badge pending">… Pending</span>`;
+}
+
+function recoveryTimingHtml(e){
+  if (!e) return "";
+
+  const details = e.recovery_details || {};
+  const manualRequired =
+    e.recovery_status === "manual_required" ||
+    e.manual_required === true ||
+    details.manual_required === true ||
+    details.approval_required === true;
+
+  if (manualRequired) return "";
+
+  if (e.mttr !== null && e.mttr !== undefined) {
+    return `<span class="recovery-time">MTTR ${formatMttr(e.mttr)}</span>`;
+  }
+  if (e.attempt_duration !== null && e.attempt_duration !== undefined) {
+    return `<span class="recovery-time failed">Attempt ${formatMttr(e.attempt_duration)}</span>`;
+  }
+  return "";
+}
+
+function openEventDetail(eventKey){
+  const e = eventDetailMap[eventKey];
+  if (!e) return;
+  const traceKey = getTraceKey(e.trace_id);
+  const action = e.action || "—";
+  const fault = e.fault_type || "—";
+  const root = e.root_cause || "—";
+  const score = Number(e.score || 0).toFixed(6);
+  const confidence = e.confidence == null ? "—" : `${e.confidence}%`;
+  const reason = e.reason || "No SHAP natural-language reason was sent by the backend.";
+  const shapTable = e.shap_table || e.shap_values_table || e.shap || "";
+
+  $('modalTitle').innerHTML = `<span class="trace-key">${traceKey}</span> ${escapeHtml((e.service||'').replace('ts-','').replace('-service',''))}`;
+  $('modalBody').innerHTML = `
+    <div class="detail-grid">
+      <div class="detail-card"><div class="label">Trace key</div><div class="value"><span class="trace-key">${traceKey}</span></div></div>
+      <div class="detail-card"><div class="label">Action</div><div class="value">${badgeAction(action)}</div></div>
+      <div class="detail-card"><div class="label">Confidence</div><div class="value">${escapeHtml(confidence)}</div></div>
+      <div class="detail-card"><div class="label">Fault type</div><div class="value">${badgeFault(fault)}</div></div>
+      <div class="detail-card"><div class="label">Score</div><div class="value"><span class="score-badge">${score}</span></div></div>
+      <div class="detail-card"><div class="label">Time</div><div class="value"><span class="time-badge">${fmtTime(e.timestamp)}</span></div></div>
+      <div class="detail-card" style="grid-column:1/-1"><div class="label">Root cause</div><div class="value">${badgeRoot(root)}</div></div>
+      <div class="detail-card" style="grid-column:1/-1"><div class="label">Full SkyWalking trace ID</div><div class="value mono small">${escapeHtml(e.trace_id || '—')}</div></div>
+    </div>
+    <div class="recovery-box">
+      <h3>Recovery Status</h3>
+      <div class="recovery-grid">
+        <div class="recovery-item"><div class="label">Executed</div><div class="value">${resultBadge(e.executed, "Yes", "No", e.recovery_status)}</div></div>
+        <div class="recovery-item"><div class="label">Verified</div><div class="value">${resultBadge(e.verified, "Yes", "No", e.recovery_status)}</div></div>
+        <div class="recovery-item"><div class="label">Recovery</div><div class="value">${resultBadge(e.recovered, "Successful", "Failed", e.recovery_status)}</div></div>
+        <div class="recovery-item"><div class="label">MTTR</div><div class="value"><span class="time-badge">${formatMttr(e.mttr)}</span></div></div>
+        <div class="recovery-item"><div class="label">Target</div><div class="value mono small">${escapeHtml(recoveryTarget(e))}</div></div>
+        <div class="recovery-item"><div class="label">Verification method</div><div class="value">${escapeHtml(verificationMethod(e))}</div></div>
+        <div class="recovery-item"><div class="label">Verification status</div><div class="value">${escapeHtml(verificationStatus(e))}</div></div>
+        <div class="recovery-item"><div class="label">RL action</div><div class="value">${badgeAction(e.rl_action || e.action || "—")}</div></div>
+        <div class="recovery-item"><div class="label">Executed action</div><div class="value">${badgeAction(e.action || "—")}</div></div>
+        <div class="recovery-item wide"><div class="label">Recovery message</div><div class="value recovery-message">${escapeHtml(e.recovery_message || "No recovery message was sent by the backend.")}</div></div>
+      </div>
+    </div>
+    <div class="shap-box">
+      <h3>LLM-based decision reason</h3>
+      <div class="shap-reason">${escapeHtml(reason)}</div>
+    </div>`;
+  $('detailModal').classList.add('open');
+}
+
+function closeEventDetail(){
+  $('detailModal').classList.remove('open');
+}
+
+function fmtTime(ts){ try{ return new Date(ts).toLocaleTimeString('en-IE',{hour12:false}); }catch{ return '–'; } }
+function shortTrace(t){ return (t||'').length>26 ? t.slice(0,16)+'…'+t.slice(-6) : (t||''); }
+
+function setConn(live){
+  $('connRow').innerHTML = `<span class="d" style="background:var(--${live?'green':'red'})"></span><span>${live?'Live connected':'Disconnected'}</span>`;
+  const b=$('badge');
+  b.className = 'badge ' + (live?'live':'dead');
+  $('badgeText').textContent = live?'Live':'Reconnecting';
+  b.querySelector('.d').style.background = live?'var(--green)':'var(--red)';
+}
+
+function connect(){
+  const ws = new WebSocket(WS_URL);
+  ws.onopen = () => setConn(true);
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'ping') return;
+    state = { ...state, ...msg };
+    render();
+  };
+  ws.onclose = () => { setConn(false); setTimeout(connect, 2500); };
+  ws.onerror = () => ws.close();
+}
+
+function render(){
+  const traces = state.recent_traces || [];
+  $('mTotal').textContent  = traces.length;
+  $('mNormal').textContent = traces.filter(t=>t.status==='NORMAL').length;
+  $('mAnom').textContent   = traces.filter(t=>t.status==='ANOMALY').length;
+  $('mTime').textContent   = new Date().toLocaleTimeString('en-IE',{hour12:false});
+  $('updText').textContent = 'Last update: ' + $('mTime').textContent;
+  renderTraces(); renderServices(); renderEvents();
+}
+
+function renderTraces(){
+  const q  = $('filter').value.toLowerCase();
+  const sf = $('statusFilter').value;
+
+  const actionByTrace = {};
+  const faultByTrace = {};
+  const recoveryByTrace = {};
+
+  (state.recent_actions || []).forEach(e => {
+    if (!e.trace_id) return;
+    actionByTrace[e.trace_id] = e.action;
+    faultByTrace[e.trace_id] = e.fault_type;
+    recoveryByTrace[e.trace_id] = e;
+  });
+
+  const rows = (state.recent_traces||[]).filter(t=>{
+    const traceKey = getTraceKey(t.trace_id);
+    const action = actionByTrace[t.trace_id] || t.action_taken || "";
+    const faultType = t.fault_type || faultByTrace[t.trace_id] || "";
+    const recovery = recoveryByTrace[t.trace_id];
+    const recoveryText = recovery
+      ? [recovery.recovery_status,recovery.executed,recovery.verified,recovery.recovered,recovery.mttr,recovery.attempt_duration].join(" ")
+      : "";
+    const blob = [traceKey,t.service,t.root_cause,t.trace_id,t.status,action,faultType,recoveryText].join(' ').toLowerCase();
+    return (!q || blob.includes(q)) && (sf==='ALL' || t.status===sf);
+  });
+
+  $('traceCount').textContent = `${rows.length} shown`;
+
+  $('traceBody').innerHTML = rows.map(t=>{
+    const traceKey = getTraceKey(t.trace_id);
+    const faultType = t.fault_type || faultByTrace[t.trace_id] || "—";
+    let faultClass = "red";
+
+    if (faultType === "normal") {
+        faultClass = "green";
+    }
+    else if (faultType === "—") {
+        faultClass = "none";
+    }
+
+    const action = actionByTrace[t.trace_id] || t.action_taken || "—";
+    const actionHtml = action === "—"
+      ? `<span class="action-none">—</span>`
+      : `<span class="action-badge">${escapeHtml(action)}</span>`;
+
+    const recoveryEvent = recoveryByTrace[t.trace_id];
+    const recoveryHtml = recoveryBadge(recoveryEvent);
+
+    let mttrHtml = `
+        <span class="mttr-badge none">—</span>
+    `;
+
+    const recoveryDetails = recoveryEvent?.recovery_details || {};
+    const manualRequired = Boolean(
+      recoveryEvent && (
+        recoveryEvent.recovery_status === "manual_required" ||
+        recoveryEvent.manual_required === true ||
+        recoveryDetails.manual_required === true ||
+        recoveryDetails.approval_required === true
+      )
+    );
+
+    if (
+        recoveryEvent &&
+        !manualRequired &&
+        recoveryEvent.executed === true &&
+        recoveryEvent.verified === true &&
+        recoveryEvent.mttr != null
+    ) {
+        mttrHtml = `
+            <span class="mttr-badge success">
+                ${formatMttr(recoveryEvent.mttr)}
+            </span>
+        `;
+    }
+
+    return `<tr>
+      <td><span class="trace-key">${traceKey}</span></td>
+      <td class="mono small">${fmtTime(t.timestamp)}</td>
+      <td><span class="status ${t.status}">${t.status}</span></td>
+      <td class="mono small">${t.service||''}</td>
+      <td class="mono small">${Number(t.score??0).toFixed(6)}</td>
+      <td class="mono small">${t.threshold==null?'–':Number(t.threshold).toFixed(6)}</td>
+      <td class="mono small">${t.duration_ms==null?'–':t.duration_ms+' ms'}</td>
+      <td class="small"><span class="root-cause">${t.root_cause || "—"}</span></td>
+      <td><span class="fault small ${faultClass}">${escapeHtml(faultType)}</span></td>
+      <td>${actionHtml}</td>
+      <td>${recoveryHtml}</td>
+      <td>${mttrHtml}</td>
+      <td class="mono traceid small" title="${escapeHtml(t.trace_id||'')}">${shortTrace(t.trace_id)}</td>
+    </tr>`;
+  }).join('') ||
+  `<tr><td colspan="13" class="empty">No traces yet. Send a request and wait for SkyWalking indexing.</td></tr>`;
+}
+
+function renderServices(){
+  const services = state.services || [];
+  $('svcCount').textContent = `${services.length} services`;
+  $('services').innerHTML = services.map(s=>{
+    const score = Number(s.score||0);
+    const pct = Math.min(score/0.0018*100, 100);
+    const col = s.status==='healthy' ? 'var(--muted)' : 'var(--red)';
+    return `<div class="svc">
+      <div><b>${(s.name||'').replace('ts-','').replace('-service','')}</b>
+        <div class="bar"><div style="width:${pct}%"></div></div>
+      </div>
+      <div class="right mono small" style="color:${col}">${score.toFixed(6)}<br>${s.status||''}</div>
+    </div>`;
+  }).join('') || '<div class="empty">No services yet.</div>';
+}
+
+let _lastEventsKey = "";
+function renderEvents(){
+  const events = state.recent_actions || [];
+  const eventQ = ($('eventFilter')?.value || "").toLowerCase();
+
+  const filteredEvents = events.filter(e => {
+    const traceKey = getTraceKey(e.trace_id);
+    const blob = [
+      traceKey, e.service, e.action, e.fault_type, e.root_cause, e.trace_id,
+      e.recovery_status, e.executed, e.verified, e.recovered, e.mttr, e.attempt_duration
+    ].join(" ").toLowerCase();
+    return !eventQ || blob.includes(eventQ);
+  });
+
+  $('eventCount').textContent = `${filteredEvents.length} / ${events.length} events`;
+
+  // Include search query in key so filtering updates the list immediately.
+  const key = eventQ + "|" + filteredEvents.map(e =>
+    getTraceKey(e.trace_id)
+    + (e.timestamp||'')
+    + (e.action||'')
+    + (e.fault_type||'')
+    + (e.recovery_status||'')
+    + String(e.verified)
+    + String(e.manual_required)
+    + String(e.mttr)
+  ).join('|');
+  if (key === _lastEventsKey) return;
+  _lastEventsKey = key;
+
+  eventDetailMap = {};
+  $('events').innerHTML = filteredEvents.map((e, idx) => {
+    const traceKey = getTraceKey(e.trace_id);
+    const eventKey = `${traceKey}-${idx}`;
+    eventDetailMap[eventKey] = e;
+
+    const faultHtml = badgeFault(e.fault_type || "—");
+    const actionHtml = badgeAction(e.action || "—");
+    const rootHtml = badgeRoot(e.root_cause || "—");
+    const recoveryHtml = recoveryBadge(e);
+    const timingHtml = recoveryTimingHtml(e);
+
+    return `
+    <div class="event" role="button" tabindex="0" title="Click to view SHAP explanation"
+         onclick="openEventDetail('${eventKey}')"
+         onkeydown="if(event.key==='Enter'||event.key===' '){openEventDetail('${eventKey}')}">
+        <div class="top">
+            <b><span class="trace-key">${traceKey}</span> ${escapeHtml((e.service||'').replace('ts-','').replace('-service',''))}</b>
+            ${actionHtml}
+        </div>
+
+        <div class="meta mono">
+            <span class="time-badge">${fmtTime(e.timestamp)}</span>
+            ${faultHtml}
+            ${actionHtml}
+            <span class="score-badge">${Number(e.score||0).toFixed(6)}</span>
+            ${rootHtml}
+        </div>
+
+        <div class="recovery-summary">
+          ${recoveryHtml}
+          
+        </div>
+
+        ${e.reason ? `<div class="reason">${escapeHtml(e.reason)}</div>` : ""}
+    </div>`;
+  }).join('') || '<div class="empty">No recovery events yet.</div>';
+}
+
+$('filter').addEventListener('input', renderTraces);
+$('statusFilter').addEventListener('change', renderTraces);
+$('eventFilter').addEventListener('input', renderEvents);
+$('modalClose').addEventListener('click', closeEventDetail);
+$('detailModal').addEventListener('click', e => {
+  if (e.target.id === 'detailModal') closeEventDetail();
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeEventDetail();
+});
+setConn(false);
+connect();
+</script>
+</body>
+</html>

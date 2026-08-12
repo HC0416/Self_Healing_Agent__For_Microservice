@@ -1,0 +1,1 @@
+"""A class to hold common string constants used throughout the codebase."""

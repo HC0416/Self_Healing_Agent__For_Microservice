@@ -1,0 +1,6 @@
+[submodule "src/src/train-ticket-fault-replicate"]
+	path = src/src/train-ticket-fault-replicate
+	url = https://github.com/FudanSELab/train-ticket-fault-replicate.git
+[submodule "src/src/DeepTraLog"]
+	path = src/src/DeepTraLog
+	url = https://github.com/eamoncullimore2-lgtm/DeepTraLog.git

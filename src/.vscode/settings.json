@@ -1,0 +1,19 @@
+{
+    "java.compile.nullAnalysis.mode": "disabled",
+    "cSpell.words": [
+        "deeptralog",
+        "Eamon",
+        "embedder",
+        "Embedder",
+        "gaiaadm",
+        "netem",
+        "proot",
+        "pumba",
+        "Pumba",
+        "Qwen",
+        "shanghaihongqiao",
+        "SKYWALKING",
+        "svdd"
+    ],
+    "python-envs.defaultEnvManager": "ms-python.python:system"
+}

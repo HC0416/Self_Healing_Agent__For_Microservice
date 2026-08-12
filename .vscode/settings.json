@@ -1,0 +1,8 @@
+{
+    "python-envs.defaultEnvManager": "ms-python.python:system",
+    "python.analysis.extraPaths": [
+        "./src/self_healing_code/src"
+    ],
+    "java.configuration.updateBuildConfiguration": "interactive",
+    "java.compile.nullAnalysis.mode": "automatic"
+}

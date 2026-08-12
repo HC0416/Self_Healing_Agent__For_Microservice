@@ -1,0 +1,1201 @@
+version: "3"
+
+services:
+
+  # ── SkyWalking ────────────────────────────────────────────────
+  skywalking-oap:
+    image: apache/skywalking-oap-server:9.4.0
+    container_name: skywalking-oap
+    restart: always
+    ports:
+      - "11800:11800"
+      - "12800:12800"
+    networks:
+      - my-network
+
+  skywalking-ui:
+    image: apache/skywalking-ui:9.4.0
+    container_name: skywalking-ui
+    restart: always
+    ports:
+      - "8090:8080"
+    environment:
+      - SW_OAP_ADDRESS=http://skywalking-oap:12800
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  # ── Infrastructure ────────────────────────────────────────────
+  redis:
+    image: redis
+    ports:
+      - 6379:6379
+    networks:
+      - my-network
+
+
+  nacos:
+    image: nacos/nacos-server:v2.1.0
+    container_name: nacos
+    environment:
+      - MODE=standalone
+      - PREFER_HOST_MODE=hostname
+    ports:
+      - "8848:8848"
+      - "9848:9848"
+    networks:
+      - my-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: train-ticket-nginx-1
+    restart: always
+
+    ports:
+      - "12340:12340"
+
+    volumes:
+      - ./nginx:/etc/nginx/conf.d
+
+    depends_on:
+      - ts-auth-service
+      - ts-auth-service-backup
+
+    networks:
+      - my-network
+
+  ts-auth-mysql:
+    image: mysql:5.7
+    container_name: ts-auth-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: Abcd1234#
+      MYSQL_DATABASE: ts-auth-mysql
+    networks:
+      - my-network
+
+  ts-voucher-mysql:
+    image: mysql
+    expose:
+      - "3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+    networks:
+      - my-network
+
+  ts-order-mysql:
+    image: mysql:5.7
+    container_name: ts-order-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: Abcd1234#
+      MYSQL_DATABASE: ts
+    networks:
+      - my-network
+
+  ts-order-other-mysql:
+    image: mysql:5.7
+    container_name: ts-order-other-mysql
+    environment:
+          - MYSQL_ROOT_PASSWORD=Abcd1234#
+          - MYSQL_ROOT_HOST=%
+          - MYSQL_DATABASE=ts-order-other-mysql
+    networks:
+      - my-network
+
+
+  # ── UI ────────────────────────────────────────────────────────
+  ts-ui-dashboard:
+    build: ts-ui-dashboard
+    image: ${IMG_REPO}/ts-ui-dashboard:${IMG_TAG}
+    restart: always
+    ports:
+      - 8080:8080
+    networks:
+      - my-network
+
+  # ── Services ─────────────────────────────────────────────────
+  ts-auth-service:
+    build: ts-auth-service
+    image: ${IMG_REPO}/ts-auth-service:${IMG_TAG}
+    restart: always
+    ports:
+      - "12340"
+    environment:
+      - SW_AGENT_NAME=ts-auth-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+    cap_add:
+      - NET_ADMIN
+
+  ts-auth-service-backup:
+    build: ts-auth-service
+    image: ${IMG_REPO}/ts-auth-service:${IMG_TAG}
+    container_name: train-ticket-ts-auth-service-backup-1
+    restart: always
+
+    expose:
+      - "12340"
+
+    environment:
+      - SW_AGENT_NAME=ts-auth-service-backup
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - AUTH_MYSQL_HOST=ts-auth-mysql
+      - AUTH_MYSQL_PORT=3306
+      - AUTH_MYSQL_DATABASE=ts-auth-mysql
+      - AUTH_MYSQL_USER=root
+      - AUTH_MYSQL_PASSWORD=Abcd1234#
+
+    depends_on:
+      - skywalking-oap
+      - nacos
+      - ts-auth-mysql
+
+    networks:
+      - my-network
+
+  ts-auth-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-user-service:
+    build: ts-user-service
+    image: ${IMG_REPO}/ts-user-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 12342:12342
+    environment:
+      - SW_AGENT_NAME=ts-user-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-user-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-verification-code-service:
+    build: ts-verification-code-service
+    image: ${IMG_REPO}/ts-verification-code-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 15678:15678
+    environment:
+      - SW_AGENT_NAME=ts-verification-code-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-account-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-route-service:
+    build: ts-route-service
+    image: ${IMG_REPO}/ts-route-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 11178:11178
+    environment:
+      - SW_AGENT_NAME=ts-route-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+      - ts-route-mysql
+    networks:
+      - my-network
+
+  # ts-route-mongo:
+  #   image: mongo:4.4
+  #   networks:
+  #     - my-network
+
+  ts-contacts-service:
+    build: ts-contacts-service
+    image: ${IMG_REPO}/ts-contacts-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 12347:12347
+    environment:
+      - SW_AGENT_NAME=ts-contacts-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-contacts-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-order-service:
+    build: ts-order-service
+    image: ${IMG_REPO}/ts-order-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 12031:12031
+    environment:
+      - SW_AGENT_NAME=ts-order-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - ORDER_MYSQL_HOST=ts-order-mysql
+      - ORDER_MYSQL_DATABASE=ts
+      - ORDER_MYSQL_USER=root
+      - ORDER_MYSQL_PASSWORD:Abcd1234#
+    depends_on:
+      - skywalking-oap
+      - nacos
+      - ts-order-mysql
+    networks:
+      - my-network
+
+
+
+
+
+
+
+  ts-order-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-order-other-service:
+    build: ts-order-other-service
+    image: ${IMG_REPO}/ts-order-other-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 12032:12032
+    environment:
+      - SW_AGENT_NAME=ts-order-other-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - ORDER_OTHER_MYSQL_HOST=ts-order-other-mysql
+      - ORDER_OTHER_MYSQL_PASSWORD=Abcd1234#
+      - ORDER_OTHER_MYSQL_DATABASE=ts-order-other-mysql
+      - ORDER_OTHER_MYSQL_USER=root
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-order-other-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-config-service:
+    build: ts-config-service
+    image: ${IMG_REPO}/ts-config-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 15679:15679
+    environment:
+        - SW_AGENT_NAME=ts-config-service
+        - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+        - NACOS_ADDRS=nacos:8848
+        - CONFIG_MYSQL_HOST=ts-config-mysql
+        - CONFIG_MYSQL_PORT=3306
+        - CONFIG_MYSQL_DATABASE=ts-config-mysql
+        - CONFIG_MYSQL_PASSWORD=Abcd1234#
+    depends_on:
+        - skywalking-oap
+        - nacos
+        - ts-config-mysql
+    networks:
+        - my-network
+
+  # ts-config-mongo:
+  #   image: mongo:4.4
+  #   networks:
+  #     - my-network
+
+  ts-station-service:
+    build: ts-station-service
+    image: ${IMG_REPO}/ts-station-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 12345:12345
+    environment:
+      - SW_AGENT_NAME=ts-station-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  # ts-station-mongo:
+  #   image: mongo:4.4
+  #   networks:
+  #     - my-network
+
+  ts-train-service:
+    build: ts-train-service
+    image: ${IMG_REPO}/ts-train-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 14567:14567
+    environment:
+      - SW_AGENT_NAME=ts-train-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-train-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-travel-service:
+      build: ts-travel-service
+      image: ${IMG_REPO}/ts-travel-service:${IMG_TAG}
+      restart: always
+      ports:
+        - 12346:12346
+      environment:
+        - SW_AGENT_NAME=ts-travel-service
+        - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+        - NACOS_ADDRS=nacos:8848
+        - TRAVEL_MYSQL_HOST=ts-travel-mysql
+        - TRAVEL_MYSQL_PORT=3306
+        - TRAVEL_MYSQL_DATABASE=ts-travel-mysql
+        - TRAVEL_MYSQL_PASSWORD=Abcd1234#
+      depends_on:
+        - skywalking-oap
+        - nacos
+        - ts-travel-mysql
+      networks:
+        - my-network
+
+  ts-travel-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-travel2-service:
+    build: ts-travel2-service
+    image: ${IMG_REPO}/ts-travel2-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 16346:16346
+    environment:
+      - SW_AGENT_NAME=ts-travel2-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-travel2-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-preserve-service:
+    build: ts-preserve-service
+    image: ${IMG_REPO}/ts-preserve-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 14568:14568
+    environment:
+      - SW_AGENT_NAME=ts-preserve-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-preserve-other-service:
+    build: ts-preserve-other-service
+    image: ${IMG_REPO}/ts-preserve-other-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 14569:14569
+    environment:
+      - SW_AGENT_NAME=ts-preserve-other-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-basic-service:
+    build: ts-basic-service
+    image: ${IMG_REPO}/ts-basic-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 15680:15680
+    environment:
+      - SW_AGENT_NAME=ts-basic-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-price-service:
+    build: ts-price-service
+    image: ${IMG_REPO}/ts-price-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 16579:16579
+    environment:
+      - SW_AGENT_NAME=ts-price-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-price-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-notification-service:
+    build: ts-notification-service
+    image: ${IMG_REPO}/ts-notification-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 17853:17853
+    environment:
+      - SW_AGENT_NAME=ts-notification-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-security-service:
+    build: ts-security-service
+    image: ${IMG_REPO}/ts-security-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 11188:11188
+    environment:
+      - SW_AGENT_NAME=ts-security-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-security-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-inside-payment-service:
+    build: ts-inside-payment-service
+    image: ${IMG_REPO}/ts-inside-payment-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 18673:18673
+    environment:
+      - SW_AGENT_NAME=ts-inside-payment-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - INSIDE_PAYMENT_MYSQL_HOST=ts-inside-payment-mysql
+      - INSIDE_PAYMENT_MYSQL_DATABASE=ts-inside-payment-mysql
+      - INSIDE_PAYMENT_MYSQL_USER=root
+      - INSIDE_PAYMENT_MYSQL_PASSWORD=Abcd1234#
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-inside-payment-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-execute-service:
+    build: ts-execute-service
+    image: ${IMG_REPO}/ts-execute-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 12386:12386
+    environment:
+      - SW_AGENT_NAME=ts-execute-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-payment-service:
+    build: ts-payment-service
+    image: ${IMG_REPO}/ts-payment-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 19001:19001
+    environment:
+      - SW_AGENT_NAME=ts-payment-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  # ts-payment-mongo:
+  #   image: mongo:4.4
+  #   networks:
+  #     - my-network
+
+  ts-rebook-service:
+    build: ts-rebook-service
+    image: ${IMG_REPO}/ts-rebook-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 18886:18886
+    environment:
+      - SW_AGENT_NAME=ts-rebook-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-rebook-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-cancel-service:
+    build: ts-cancel-service
+    image: ${IMG_REPO}/ts-cancel-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 18885:18885
+    environment:
+      - SW_AGENT_NAME=ts-cancel-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-assurance-service:
+    build: ts-assurance-service
+    image: ${IMG_REPO}/ts-assurance-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 18890:18890
+    environment:
+      - SW_AGENT_NAME=ts-assurance-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-assurance-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-seat-service:
+    build: ts-seat-service
+    image: ${IMG_REPO}/ts-seat-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 18898:18898
+    environment:
+      - SW_AGENT_NAME=ts-seat-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-travel-plan-service:
+    build: ts-travel-plan-service
+    image: ${IMG_REPO}/ts-travel-plan-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 14322:14322
+    environment:
+      - SW_AGENT_NAME=ts-travel-plan-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-ticket-office-service:
+    build: ts-ticket-office-service
+    image: ${IMG_REPO}/ts-ticket-office-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 16108:16108
+    environment:
+      - SW_AGENT_NAME=ts-ticket-office-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - TICKET_OFFICE_MYSQL_HOST=ts-ticket-office-mysql
+      - TICKET_OFFICE_MYSQL_PORT=3306
+      - TICKET_OFFICE_MYSQL_DATABASE=ts-ticket-office-mysql
+      - TICKET_OFFICE_MYSQL_PASSWORD=Abcd1234#
+      - TICKET_OFFICE_MYSQL_USER=root
+    depends_on:
+      - skywalking-oap
+      - nacos
+      - ts-ticket-office-mysql
+    networks:
+      - my-network 
+
+  ts-ticket-office-mysql:
+    image: mysql:5.7
+    restart: always
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_ROOT_HOST=%
+      - MYSQL_DATABASE=ts-ticket-office-mysql
+    networks:
+      - my-network
+
+
+  ts-news-service:
+    build: ts-news-service
+    image: ${IMG_REPO}/ts-news-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 12862:12862
+    environment:
+      - SW_AGENT_NAME=ts-news-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-news-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-voucher-service:
+    build: ts-voucher-service
+    image: ${IMG_REPO}/ts-voucher-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 16101:16101
+    depends_on:
+      - ts-voucher-mysql
+      - skywalking-oap
+    volumes:
+      - /var/lib/mysql
+    environment:
+      - SW_AGENT_NAME=ts-voucher-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    networks:
+      - my-network
+
+  ts-route-plan-service:
+    build: ts-route-plan-service
+    image: ${IMG_REPO}/ts-route-plan-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 14578:14578
+    environment:
+      - SW_AGENT_NAME=ts-route-plan-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-food-service:
+    build: ts-food-service
+    image: ${IMG_REPO}/ts-food-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 18856:18856
+    environment:
+      - SW_AGENT_NAME=ts-food-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-consign-service:
+    build: ts-consign-service
+    image: ${IMG_REPO}/ts-consign-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 16111:16111
+    environment:
+      - SW_AGENT_NAME=ts-consign-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-consign-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  ts-consign-price-service:
+    build: ts-consign-price-service
+    image: ${IMG_REPO}/ts-consign-price-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 16110:16110
+    environment:
+      - SW_AGENT_NAME=ts-consign-price-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-consign-price-mongo:
+    image: mongo:4.4
+    networks:
+      - my-network
+
+  # ts-food-mongo:
+  #   image: mongo:4.4
+  #   networks:
+  #     - my-network
+
+  ts-admin-basic-info-service:
+    build: ts-admin-basic-info-service
+    image: ${IMG_REPO}/ts-admin-basic-info-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 18767:18767
+    environment:
+      - SW_AGENT_NAME=ts-admin-basic-info-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-admin-order-service:
+    build: ts-admin-order-service
+    image: ${IMG_REPO}/ts-admin-order-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 16112:16112
+    environment:
+      - SW_AGENT_NAME=ts-admin-order-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-admin-route-service:
+    build: ts-admin-route-service
+    image: ${IMG_REPO}/ts-admin-route-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 16113:16113
+    environment:
+      - SW_AGENT_NAME=ts-admin-route-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-admin-travel-service:
+    build: ts-admin-travel-service
+    image: ${IMG_REPO}/ts-admin-travel-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 16114:16114
+    environment:
+      - SW_AGENT_NAME=ts-admin-travel-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-admin-user-service:
+    build: ts-admin-user-service
+    image: ${IMG_REPO}/ts-admin-user-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 16115:16115
+    environment:
+      - SW_AGENT_NAME=ts-admin-user-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-delivery-service:
+    build: ts-delivery-service
+    image: ${IMG_REPO}/ts-delivery-service:${IMG_TAG}
+    restart: always
+    environment:
+      - SW_AGENT_NAME=ts-delivery-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+  ts-gateway-service:
+    build: ts-gateway-service
+    image: ${IMG_REPO}/ts-gateway-service:${IMG_TAG}
+    restart: always
+    ports:
+      - 18888:18888
+    environment:
+      - SW_AGENT_NAME=ts-gateway-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+    depends_on:
+      - skywalking-oap
+      - nacos
+    networks:
+      - my-network
+
+
+  ts-assurance-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-assurance-mysql
+    networks:
+      - my-network
+
+  ts-config-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-config-mysql
+    networks:
+      - my-network
+
+  ts-consign-price-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-consign-price-mysql
+    networks:
+      - my-network
+
+  ts-consign-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-consign-mysql
+    networks:
+      - my-network
+
+  ts-contacts-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-contacts-mysql
+    networks:
+      - my-network
+
+  ts-delivery-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-delivery-mysql
+    networks:
+      - my-network
+
+  ts-food-delivery-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-food-delivery-mysql
+    networks:
+      - my-network
+
+  ts-food-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-food-mysql
+    networks:
+      - my-network
+
+  ts-inside-payment-mysql:
+    image: mysql:5.7
+    command: --innodb-use-native-aio=0
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-inside-payment-mysql
+    networks:
+      - my-network
+
+  ts-verification-code-mysql:
+    image: mysql:5.7
+    command: --innodb-use-native-aio=0
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-verification-code-mysql
+    networks:
+      - my-network
+
+  ts-notification-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-notification-mysql
+    networks:
+      - my-network
+
+
+  ts-payment-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-payment-mysql
+    networks:
+      - my-network
+
+  ts-price-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts
+    networks:
+      - my-network
+
+  ts-route-mysql:
+    image: mysql:5.7
+    command: --innodb-use-native-aio=0
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts
+    networks:
+      - my-network
+
+  ts-security-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-security-mysql
+    networks:
+      - my-network
+
+  ts-station-food-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts
+    networks:
+      - my-network
+
+  ts-station-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-station-mysql
+    networks:
+      - my-network
+
+  ts-train-food-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-train-food-mysql
+    networks:
+      - my-network
+
+  ts-train-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-train-mysql
+    networks:
+      - my-network
+
+  ts-travel-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-travel-mysql
+    networks:
+      - my-network
+
+  ts-travel2-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts-travel2-mysql
+    networks:
+      - my-network
+
+  ts-wait-order-mysql:
+    image: mysql:5.7
+    environment:
+      - MYSQL_ROOT_PASSWORD=Abcd1234#
+      - MYSQL_DATABASE=ts
+    networks:
+      - my-network
+
+  ts-food-delivery-service:
+    build: ts-food-delivery-service
+    image: ${IMG_REPO}/ts-food-delivery-service:${IMG_TAG}
+    restart: always
+    environment:
+      - SW_AGENT_NAME=ts-food-delivery-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+    networks:
+      - my-network
+  ts-station-food-service:
+    build: ts-station-food-service
+    image: ${IMG_REPO}/ts-station-food-service:${IMG_TAG}
+    restart: always
+    environment:
+      - SW_AGENT_NAME=ts-station-food-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+    networks:
+      - my-network
+  ts-train-food-service:
+    build: ts-train-food-service
+    image: ${IMG_REPO}/ts-train-food-service:${IMG_TAG}
+    restart: always
+    environment:
+      - SW_AGENT_NAME=ts-train-food-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+    networks:
+      - my-network
+  ts-wait-order-service:
+    build: ts-wait-order-service
+    image: ${IMG_REPO}/ts-wait-order-service:${IMG_TAG}
+    restart: always
+    environment:
+      - SW_AGENT_NAME=ts-wait-order-service
+      - SW_AGENT_COLLECTOR_BACKEND_SERVICES=skywalking-oap:11800
+      - NACOS_ADDRS=nacos:8848
+    networks:
+      - my-network
+networks:
+  my-network:
+    driver: bridge
+
+
+
+
+
+
+
+
