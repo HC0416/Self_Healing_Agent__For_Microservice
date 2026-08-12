@@ -1,49 +1,229 @@
-# MCM PRACTICUM
+# Learning-Based Self-Healing Agents for Fault Detection and Recovery in Microservice Systems
 
-This is a template for MCM practicums.  Please read these instructions carefully.
+The project proposes an AI-driven self-healing framework that combines graph neural network (GGNN) anomaly detection with reinforcement learning-based recovery to automatically detect, diagnose, recover, and explain failures in cloud-native microservice systems.
 
-This file is written in
-[markdown](https://guides.github.com/features/mastering-markdown/).  Markdown
-is a suitable format for documents stored in git repositories.
+The framework is evaluated using the Train-Ticket microservice benchmark together with Apache SkyWalking for distributed tracing.
 
-## Instructions
+---
 
-You *must* do the following:
+## Features
 
-1 - Fork this repo.
+- Distributed trace collection using Apache SkyWalking
+- GGNN + Deep SVDD anomaly detection
+- Attention-based root cause localisation
+- Reinforcement learning recovery policy (REINFORCE)
+- Adaptive recovery execution
+- Automatic recovery verification
+- Local LLM-based recovery explanation (Qwen2.5)
+- Live monitoring dashboard
 
-2 - There is no need to rename your fork but if you wish to do so please use
-     the format:
+---
 
-     2026-mcm-username
+## Repository Structure
 
-replacing `username` with your School of Computing login name.
+```
+src/
+ ├── pipeline/           # Offline training pipeline
+ ├── self_healing_agent/ # Online monitoring and recovery framework
+ ├── train-ticket/       # Train-Ticket benchmark
+ └── requirements.txt
+```
 
-For example, if Stephen Blott were to be doing an MCM practicum, he would rename
-his repo as:
+---
 
-     2026-mcm-sblott
+## System Architecture
 
+The proposed framework consists of six major components:
 
-You should also update the *Project description*.
+1. Distributed Trace Collection
+2. GGNN-Based Anomaly Detection
+3. Reinforcement Learning Recovery Policy
+4. Adaptive Recovery Executor
+5. Recovery Verification
+6. LLM-Based Recovery Explanation
 
-3 - This directory has two important sub-directories.
+The workflow is:
 
-- All of your source code should be placed in the `src` sub-directory.
+```
+User Request
+      │
+      ▼
+Apache SkyWalking
+      │
+      ▼
+Trace Graph Construction
+      │
+      ▼
+GGNN + Deep SVDD
+      │
+      ▼
+Root Cause Localisation
+      │
+      ▼
+RL Recovery Policy
+      │
+      ▼
+Adaptive Recovery Executor
+      │
+      ▼
+Recovery Verification
+      │
+      ▼
+LLM Explanation
+```
 
-- All of your documentation should be placed in the `docs` sub-directory.
+---
 
-4 - There is further important documentation in the `docs` directory.  Read that next.
+## Requirements
 
-When you are have followed all of these instructions and are sure that you
-understand what is expected, you may replace the contents of this file with a
-brief description of your project (two or three paragraphs).
+- Python 3.10+
+- Docker
+- Docker Compose
+- Apache SkyWalking
+- Train-Ticket benchmark
+- CUDA (optional)
 
-## Additional Resources
+Main Python libraries include:
 
-- Git [cheat sheet](https://gitlab.computing.dcu.ie/sblott/local-gitlab-documentation/blob/master/cheat-sheet.md)
-- Gitlab [CI environment](https://gitlab.computing.dcu.ie/sblott/docker-ci-environment) and it's [available software](https://gitlab.computing.dcu.ie/sblott/docker-ci-environment/blob/master/Dockerfile)
-- Example projects with CI configured:
-   * [Python](https://gitlab.computing.dcu.ie/sblott/test-project-python)
-   * [Java](https://gitlab.computing.dcu.ie/sblott/test-project-java)
-   * [MySql](https://gitlab.computing.dcu.ie/sblott/test-project-mysql)
+- PyTorch
+- PyTorch Geometric
+- NumPy
+- Pandas
+- Docker SDK
+- Requests
+- Transformers
+
+Install dependencies using
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+## Running the Project
+
+### 1. Start Train-Ticket
+
+```bash
+docker compose up -d
+```
+
+### 2. Start SkyWalking
+
+Ensure both the OAP server and UI are running.
+
+### 3. Run the Self-Healing Agent
+
+```bash
+python monitor.py
+```
+
+The framework continuously:
+
+- collects distributed traces
+- detects anomalies
+- localises root causes
+- predicts recovery actions
+- executes recovery
+- verifies recovery
+- generates LLM explanations
+
+---
+
+## Recovery Actions
+
+The reinforcement learning policy predicts one of the following actions:
+
+- Restart
+- Scale Up
+- Reroute
+- Rollback*
+
+\* Rollback requires manual approval before execution.
+
+---
+
+## Evaluation
+
+Offline evaluation compares:
+
+- Isolation Forest
+- GCN + Deep SVDD
+- GGNN (mixed training)
+- GGNN (normal-only)
+
+Online evaluation includes:
+
+- CPU overload
+- Network delay
+- Service crash
+- Database failure
+
+Metrics:
+
+- Precision
+- Recall
+- F1-score
+- AUC-ROC
+- Detection Success Rate
+- Recovery Success Rate
+- Detection Latency
+- MTTR
+
+---
+
+## Technologies
+
+- Python
+- PyTorch
+- PyTorch Geometric
+- Apache SkyWalking
+- Docker
+- Train-Ticket
+- Qwen2.5
+- Graph Neural Networks
+- Deep SVDD
+- Reinforcement Learning
+
+---
+
+## Experimental Results
+
+The proposed framework was evaluated on the Train-Ticket microservice benchmark.
+
+### Offline Anomaly Detection
+
+| Model | AUC | Precision | Recall | F1 |
+|------|----:|----------:|-------:|---:|
+| Isolation Forest | 0.917 | 0.917 | 0.846 | 0.880 |
+| GCN + Deep SVDD | 0.854 | 0.678 | 0.895 | 0.772 |
+| GGNN (Mixed Training) | 0.869 | 0.756 | 0.913 | 0.827 |
+| **GGNN (Normal-Only)** | **0.947** | **0.968** | **0.749** | **0.845** |
+
+### Reinforcement Learning Recovery
+
+| Method | Accuracy |
+|---------|---------:|
+| Rule-Based | 87.6% |
+| REINFORCE | 91.9% |
+| **Supervised Pretraining + REINFORCE** | **96.5%** |
+
+### Online Evaluation
+
+The deployed framework successfully detected and recovered all evaluated fault scenarios.
+
+| Fault | Detection | Recovery |
+|--------|:---------:|:--------:|
+| CPU Overload | 10/10 |  10/10 |
+| Network Delay | 10/10 |  10/10 |
+| Service Crash | 10/10 |  10/10 |
+| Database Error |  10/10 |  10/10 |
+
+Overall:
+
+- 100% detection success rate
+- 100% recovery success rate
+- Detection latency: **1.00–4.61 s**
+- MTTR: **4.05–18.19 s**
+
